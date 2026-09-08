@@ -1,0 +1,45 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@import 'shadcn/tailwind.css';
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background); --color-foreground: var(--foreground);
+  --color-card: var(--card); --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover); --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary); --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary); --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted); --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent); --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive); --color-border: var(--border);
+  --color-input: var(--input); --color-ring: var(--ring);
+  --font-sans: var(--font-geist-sans); --font-mono: var(--font-geist-mono);
+  --radius-sm: calc(var(--radius) * .6); --radius-md: calc(var(--radius) * .8);
+  --radius-lg: var(--radius); --radius-xl: calc(var(--radius) * 1.35);
+}
+
+:root {
+  color-scheme: dark;
+  --background: #071019; --foreground: #e8f0f7;
+  --card: #0b1622; --card-foreground: #e8f0f7;
+  --popover: #101c28; --popover-foreground: #e8f0f7;
+  --primary: #54d8ea; --primary-foreground: #061018;
+  --secondary: #172635; --secondary-foreground: #dbe8f1;
+  --muted: #13212e; --muted-foreground: #8192a3;
+  --accent: #172a38; --accent-foreground: #e8f0f7;
+  --destructive: #fb7185; --border: rgb(255 255 255 / 8%);
+  --input: rgb(255 255 255 / 12%); --ring: #54d8ea; --radius: .75rem;
+}
+
+@layer base {
+  * { @apply border-border outline-ring/50; }
+  html { @apply font-sans; }
+  body { @apply bg-background text-foreground; min-width: 320px; }
+  button { cursor: pointer; }
+}
+
+@layer components {
+  .metric-card { @apply flex min-h-28 items-start justify-between rounded-2xl border border-white/8 bg-[#0b1622] p-4 shadow-[0_16px_45px_rgba(0,0,0,.15)]; }
+  .metric-label { @apply text-xs font-medium uppercase tracking-[.08em] text-slate-500; }
+}

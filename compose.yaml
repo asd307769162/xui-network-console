@@ -1,0 +1,10 @@
+services:
+  xui-network-console:
+    build: .
+    container_name: xui-network-console
+    restart: unless-stopped
+    environment:
+      XUI_USERNAME: ${XUI_USERNAME:-}
+      XUI_PASSWORD: ${XUI_PASSWORD:-}
+    ports:
+      - "127.0.0.1:8787:8787"

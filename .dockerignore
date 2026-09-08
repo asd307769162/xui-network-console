@@ -1,0 +1,12 @@
+.git
+.openai
+.next
+.vinext
+.wrangler
+dist
+node_modules
+.pnpm-store
+outputs
+work
+.env*
+*.log
