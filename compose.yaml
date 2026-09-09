@@ -6,6 +6,8 @@ services:
     environment:
       XUI_USERNAME: ${XUI_USERNAME:-}
       XUI_PASSWORD: ${XUI_PASSWORD:-}
+    volumes:
+      - ./.env:/app/dist/server/.dev.vars:ro
     expose:
       - "8787"
 
