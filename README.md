@@ -19,7 +19,7 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-默认监听服务器的 `8787` 端口，可通过 `http://服务器IP:8787` 访问。正式使用前，请通过防火墙限制来源地址，或增加 HTTPS 和独立的控制台登录鉴权。
+默认由 Nginx 鉴权网关监听服务器的 `8787` 端口，可通过 `http://服务器IP:8787` 访问。主程序只在 Docker 内部网络开放。部署前需在 `/opt/xui-network-console-secrets/htpasswd` 配置管理员密码哈希。
 
 ## 凭据与安全
 
