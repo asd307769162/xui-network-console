@@ -97,6 +97,10 @@ export default function Home() {
     }
   };
 
+  useEffect(() => {
+    void refreshLive();
+  }, []);
+
   const confirmToggle = async () => {
     if (!pending) return;
     const change = pending;
