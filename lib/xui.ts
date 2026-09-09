@@ -1,15 +1,5 @@
 export const XUI_NODES = [
-  { alias: 'lh', url: 'http://209.135.171.205:54321' },
-  { alias: 'wf2', url: 'http://38.55.148.143:54321' },
   { alias: 'wf3', url: 'http://38.55.148.140:54321' },
-  { alias: 'w0', url: 'http://154.40.33.44:54321' },
-  { alias: 't1', url: 'http://154.40.33.65:54321/1' },
-  { alias: 't4', url: 'http://23.147.172.172:54321' },
-  { alias: 'v2', url: 'http://103.15.91.249:54321' },
-  { alias: 'v', url: 'http://69.165.68.158:54321/1' },
-  { alias: 'p1', url: 'http://103.118.245.62:54321' },
-  { alias: 'j2', url: 'http://49.212.188.72:54321' },
-  { alias: 'j4', url: 'http://160.16.122.233:54321' },
 ] as const;
 
 type JsonRecord = Record<string, unknown>;
@@ -70,4 +60,3 @@ export async function setInboundEnabled(alias: string, id: number, enabled: bool
   const { body } = await post(node.url, `/xui/inbound/update/${id}`, payload, cookie);
   return { alias: node.alias, id, enabled, message: String(body.msg || '操作成功') };
 }
-
