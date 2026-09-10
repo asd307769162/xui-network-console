@@ -1,0 +1,20 @@
+[Unit]
+Description=X-UI connection metadata collector
+After=network.target x-ui.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/bin/python3 /opt/xui-connection-collector/xui_connection_collector.py --interval 2 --retention-days 7
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/etc/x-ui /proc/net
+ReadWritePaths=/var/lib/xui-connection-collector
+
+[Install]
+WantedBy=multi-user.target

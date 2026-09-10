@@ -1,0 +1,47 @@
+import json
+import sqlite3
+import tempfile
+import unittest
+from pathlib import Path
+
+from xui_connection_collector import (
+    Connection,
+    atomic_write_json,
+    decode_proc_address,
+    make_snapshot,
+    open_state_db,
+    parse_proc_net_tcp,
+    record_sample,
+)
+
+
+PROC_TCP6 = """  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 0000000000000000FFFF0000F95B0F67:4D93 0000000000000000FFFF0000D8DED431:9BD4 01 00000000:00000000 02:0000004F 00000000 0 0 1
+   1: 0000000000000000FFFF0000F95B0F67:4D93 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000 0 0 2
+"""
+
+
+class CollectorTests(unittest.TestCase):
+    def test_decodes_ipv4_mapped_ipv6(self):
+        self.assertEqual(decode_proc_address("0000000000000000FFFF0000D8DED431", True), "49.212.222.216")
+
+    def test_parses_only_established_connections(self):
+        self.assertEqual(parse_proc_net_tcp(PROC_TCP6, True), [Connection(19859, "49.212.222.216")])
+
+    def test_records_and_builds_snapshot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = open_state_db(root / "state.db")
+            ports = {19859: {"id": 7, "remark": "test", "protocol": "dokodemo-door"}}
+            active = record_sample(state, ports, [Connection(19859, "49.212.222.216")], 1000, 604800)
+            payload = make_snapshot(state, ports, active, 1000)
+            self.assertEqual(payload["ports"][0]["activeIpCount"], 1)
+            self.assertEqual(payload["ports"][0]["ips"][0]["connections"], 1)
+            output = root / "snapshot.json"
+            atomic_write_json(output, payload)
+            self.assertEqual(json.loads(output.read_text())["schemaVersion"], 1)
+            state.close()
+
+
+if __name__ == "__main__":
+    unittest.main()
