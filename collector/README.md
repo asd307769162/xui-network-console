@@ -20,4 +20,4 @@ Run one read-only sample:
 python3 xui_connection_collector.py --once --print
 ```
 
-The first pilot covers established TCP sessions. UDP history and central-console delivery are intentionally deferred until the TCP mapping is verified on one server.
+The production collector samples established TCP sessions every five seconds. UDP is intentionally not collected. Its authenticated snapshot endpoint must be restricted to the central console IP.

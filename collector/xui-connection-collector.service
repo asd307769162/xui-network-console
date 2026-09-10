@@ -6,14 +6,14 @@ After=network.target x-ui.service
 Type=simple
 User=root
 Group=root
-ExecStart=/usr/bin/python3 /opt/xui-connection-collector/xui_connection_collector.py --interval 2 --retention-days 7
+ExecStart=/usr/bin/python3 /opt/xui-connection-collector/xui_connection_collector.py --interval 5 --retention-days 7 --listen 0.0.0.0 --http-port 18787 --allow-ip 103.118.245.108 --token-file /etc/xui-connection-collector.token
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadOnlyPaths=/etc/x-ui /proc/net
+ReadOnlyPaths=/etc/x-ui /etc/xui-connection-collector.token /proc/net
 ReadWritePaths=/var/lib/xui-connection-collector
 
 [Install]

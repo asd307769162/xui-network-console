@@ -4,12 +4,15 @@
 from __future__ import annotations
 
 import argparse
+import hmac
 import ipaddress
 import json
 import os
 import signal
 import sqlite3
 import time
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -188,6 +191,36 @@ def atomic_write_json(path: Path, payload: dict[str, object]) -> None:
     os.replace(temporary, path)
 
 
+def start_http_server(output: Path, listen: str, port: int, token: str, allow_ip: str):
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            remote_ip = self.client_address[0]
+            authorization = self.headers.get("Authorization", "")
+            supplied = authorization[7:] if authorization.startswith("Bearer ") else ""
+            if self.path != "/v1/snapshot" or remote_ip != allow_ip or not hmac.compare_digest(supplied, token):
+                self.send_error(403)
+                return
+            try:
+                body = output.read_bytes()
+            except FileNotFoundError:
+                self.send_error(503)
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, _format, *_args):
+            return
+
+    server = ThreadingHTTPServer((listen, port), Handler)
+    thread = threading.Thread(target=server.serve_forever, name="snapshot-http", daemon=True)
+    thread.start()
+    return server
+
+
 def collect_once(args: argparse.Namespace, state: sqlite3.Connection, ports: dict[int, dict[str, object]]):
     now = int(time.time())
     connections = read_connections(args.proc_root)
@@ -203,9 +236,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--state-db", type=Path, default=Path("/var/lib/xui-connection-collector/state.db"))
     parser.add_argument("--output", type=Path, default=Path("/var/lib/xui-connection-collector/snapshot.json"))
     parser.add_argument("--proc-root", type=Path, default=Path("/proc/net"))
-    parser.add_argument("--interval", type=float, default=2.0)
+    parser.add_argument("--interval", type=float, default=5.0)
     parser.add_argument("--port-refresh", type=float, default=60.0)
     parser.add_argument("--retention-days", type=int, default=7)
+    parser.add_argument("--listen", default="127.0.0.1")
+    parser.add_argument("--http-port", type=int, default=0)
+    parser.add_argument("--allow-ip", default="127.0.0.1")
+    parser.add_argument("--token-file", type=Path)
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--print", dest="print_snapshot", action="store_true")
     return parser.parse_args()
@@ -214,6 +251,14 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     state = open_state_db(args.state_db)
+    server = None
+    if args.http_port:
+        if not args.token_file:
+            raise SystemExit("--token-file is required with --http-port")
+        token = args.token_file.read_text(encoding="utf-8").strip()
+        if len(token) < 32:
+            raise SystemExit("collector token is too short")
+        server = start_http_server(args.output, args.listen, args.http_port, token, args.allow_ip)
     stopping = False
 
     def stop(_signum, _frame):
@@ -237,6 +282,8 @@ def main() -> int:
                 break
             time.sleep(max(args.interval, 0.2))
     finally:
+        if server:
+            server.shutdown()
         state.close()
     return 0
 
