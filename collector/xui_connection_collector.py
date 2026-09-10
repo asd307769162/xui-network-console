@@ -12,6 +12,8 @@ import signal
 import sqlite3
 import time
 import threading
+import urllib.error
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from collections import Counter
 from dataclasses import dataclass
@@ -105,7 +107,88 @@ def open_state_db(path: Path) -> sqlite3.Connection:
         )
         """
     )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS geo_cache (
+            ip TEXT PRIMARY KEY,
+            location TEXT NOT NULL DEFAULT '',
+            country TEXT NOT NULL DEFAULT '',
+            region TEXT NOT NULL DEFAULT '',
+            city TEXT NOT NULL DEFAULT '',
+            isp TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL,
+            updated_at INTEGER NOT NULL
+        )
+        """
+    )
+    connection.commit()
     return connection
+
+
+def lookup_ip_location(ip: str, endpoint: str, timeout: float) -> dict[str, str]:
+    address = ipaddress.ip_address(ip)
+    if not address.is_global:
+        return {"location": "内网地址", "country": "", "region": "", "city": "", "isp": ""}
+    request = urllib.request.Request(
+        endpoint.format(ip=ip),
+        headers={"Accept": "application/json", "User-Agent": "xui-network-console/1.0"},
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    if payload.get("success") is False:
+        raise ValueError(str(payload.get("message") or "geolocation lookup failed"))
+    country = str(payload.get("country") or "")
+    region = str(payload.get("region") or "")
+    city = str(payload.get("city") or "")
+    connection = payload.get("connection") if isinstance(payload.get("connection"), dict) else {}
+    isp = str(connection.get("isp") or connection.get("org") or "")
+    location = " · ".join(part for part in (country, region, city, isp) if part) or "未知"
+    return {"location": location, "country": country, "region": region, "city": city, "isp": isp}
+
+
+def resolve_one_location(state_db: Path, endpoint: str, timeout: float, retry_seconds: int) -> bool:
+    state = open_state_db(state_db)
+    now = int(time.time())
+    try:
+        row = state.execute(
+            """
+            SELECT DISTINCT sightings.ip
+            FROM sightings
+            LEFT JOIN geo_cache ON geo_cache.ip = sightings.ip
+            WHERE geo_cache.ip IS NULL OR (geo_cache.status = 'failed' AND geo_cache.updated_at < ?)
+            ORDER BY sightings.last_seen DESC
+            LIMIT 1
+            """,
+            (now - retry_seconds,),
+        ).fetchone()
+        if not row:
+            return False
+        ip = str(row[0])
+        try:
+            result = lookup_ip_location(ip, endpoint, timeout)
+            values = (ip, result["location"], result["country"], result["region"], result["city"], result["isp"], "ok", now)
+        except (OSError, ValueError, json.JSONDecodeError):
+            values = (ip, "归属地查询失败", "", "", "", "", "failed", now)
+        state.execute(
+            """
+            INSERT INTO geo_cache(ip, location, country, region, city, isp, status, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(ip) DO UPDATE SET
+                location=excluded.location, country=excluded.country, region=excluded.region,
+                city=excluded.city, isp=excluded.isp, status=excluded.status, updated_at=excluded.updated_at
+            """,
+            values,
+        )
+        state.commit()
+        return True
+    finally:
+        state.close()
+
+
+def geo_resolver_loop(state_db: Path, endpoint: str, timeout: float, retry_seconds: int, stop_event: threading.Event) -> None:
+    while not stop_event.is_set():
+        resolved = resolve_one_location(state_db, endpoint, timeout, retry_seconds)
+        stop_event.wait(1.2 if resolved else 10.0)
 
 
 def record_sample(
@@ -143,10 +226,16 @@ def make_snapshot(
     now: int,
 ) -> dict[str, object]:
     rows = state.execute(
-        "SELECT port, ip, first_seen, last_seen, samples FROM sightings ORDER BY port, last_seen DESC"
+        """
+        SELECT sightings.port, sightings.ip, sightings.first_seen, sightings.last_seen, sightings.samples,
+               COALESCE(geo_cache.location, '归属地查询中')
+        FROM sightings
+        LEFT JOIN geo_cache ON geo_cache.ip = sightings.ip
+        ORDER BY sightings.port, sightings.last_seen DESC
+        """
     ).fetchall()
     by_port: dict[int, list[dict[str, object]]] = {port: [] for port in ports}
-    for port, ip, first_seen, last_seen, samples in rows:
+    for port, ip, first_seen, last_seen, samples, location in rows:
         if port not in ports:
             continue
         by_port[port].append(
@@ -157,6 +246,7 @@ def make_snapshot(
                 "online": active[(port, ip)] > 0,
                 "connections": active[(port, ip)],
                 "samples": samples,
+                "location": location,
             }
         )
 
@@ -243,6 +333,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--http-port", type=int, default=0)
     parser.add_argument("--allow-ip", default="127.0.0.1")
     parser.add_argument("--token-file", type=Path)
+    parser.add_argument("--geo-endpoint", default="https://ipwho.is/{ip}")
+    parser.add_argument("--geo-timeout", type=float, default=4.0)
+    parser.add_argument("--geo-retry-hours", type=int, default=6)
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--print", dest="print_snapshot", action="store_true")
     return parser.parse_args()
@@ -260,6 +353,14 @@ def main() -> int:
             raise SystemExit("collector token is too short")
         server = start_http_server(args.output, args.listen, args.http_port, token, args.allow_ip)
     stopping = False
+    stop_event = threading.Event()
+    geo_thread = threading.Thread(
+        target=geo_resolver_loop,
+        args=(args.state_db, args.geo_endpoint, args.geo_timeout, args.geo_retry_hours * 3600, stop_event),
+        name="geo-resolver",
+        daemon=True,
+    )
+    geo_thread.start()
 
     def stop(_signum, _frame):
         nonlocal stopping
@@ -282,6 +383,7 @@ def main() -> int:
                 break
             time.sleep(max(args.interval, 0.2))
     finally:
+        stop_event.set()
         if server:
             server.shutdown()
         state.close()

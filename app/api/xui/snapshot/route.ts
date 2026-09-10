@@ -1,6 +1,6 @@
 import { XUI_NODES, listInbounds } from '@/lib/xui';
 
-type CollectorIp = { ip: string; firstSeen?: string; lastSeen?: string; online?: boolean; connections?: number };
+type CollectorIp = { ip: string; location?: string; firstSeen?: string; lastSeen?: string; online?: boolean; connections?: number };
 type CollectorPort = { port: number; recent1h?: number; recent24h?: number; ips?: CollectorIp[] };
 
 async function readCollector(node: (typeof XUI_NODES)[number]) {
@@ -37,7 +37,7 @@ export async function GET() {
           download: Number(item.down || 0) / 1024 ** 3,
           ips: (observed?.ips || []).map((entry) => ({
             ip: entry.ip,
-            location: '归属地待查询',
+            location: entry.location || '归属地查询中',
             firstSeen: entry.firstSeen,
             lastSeen: entry.lastSeen,
             online: entry.online,
