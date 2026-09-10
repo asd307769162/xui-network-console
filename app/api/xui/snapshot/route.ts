@@ -5,7 +5,7 @@ type CollectorPort = { port: number; recent1h?: number; recent24h?: number; ips?
 
 async function readCollector(node: (typeof XUI_NODES)[number]) {
   if (!('collectorUrl' in node)) return new Map<number, CollectorPort>();
-  const token = process.env.COLLECTOR_TOKEN;
+  const token = process.env[`COLLECTOR_TOKEN_${node.alias.toUpperCase()}`] || process.env.COLLECTOR_TOKEN;
   if (!token) throw new Error('采集器凭据尚未配置');
   const response = await fetch(node.collectorUrl, {
     headers: { authorization: `Bearer ${token}` },
