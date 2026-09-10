@@ -142,6 +142,15 @@ def lookup_ip_location(ip: str, endpoint: str, timeout: float) -> dict[str, str]
     city = str(payload.get("city") or "")
     connection = payload.get("connection") if isinstance(payload.get("connection"), dict) else {}
     isp = str(connection.get("isp") or connection.get("org") or "")
+    asn = str(connection.get("asn") or "").upper()
+    asn = asn[2:] if asn.startswith("AS") else asn
+    isp_key = isp.lower()
+    if asn in {"9808", "56046", "24400"} or "china mobile" in isp_key:
+        isp = "中国移动"
+    elif asn in {"4134", "4812", "4809"} or "china telecom" in isp_key:
+        isp = "中国电信"
+    elif asn in {"4837", "9929", "17621"} or "china unicom" in isp_key:
+        isp = "中国联通"
     location = " · ".join(part for part in (country, region, city, isp) if part) or "未知"
     return {"location": location, "country": country, "region": region, "city": city, "isp": isp}
 
@@ -333,7 +342,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--http-port", type=int, default=0)
     parser.add_argument("--allow-ip", default="127.0.0.1")
     parser.add_argument("--token-file", type=Path)
-    parser.add_argument("--geo-endpoint", default="https://ipwho.is/{ip}")
+    parser.add_argument("--geo-endpoint", default="https://ipwho.is/{ip}?lang=zh-CN")
     parser.add_argument("--geo-timeout", type=float, default=4.0)
     parser.add_argument("--geo-retry-hours", type=int, default=6)
     parser.add_argument("--once", action="store_true")
