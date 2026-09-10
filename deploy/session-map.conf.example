@@ -1,0 +1,11 @@
+# Replace both SESSION_TOKEN placeholders with the same random value.
+map_hash_bucket_size 128;
+
+map $cookie_xui_console_session $console_auth_realm {
+    default "X-UI Network Console";
+    "SESSION_TOKEN" off;
+}
+
+map $host $console_session_value {
+    default "SESSION_TOKEN";
+}

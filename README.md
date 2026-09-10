@@ -19,7 +19,7 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-默认由 Nginx 鉴权网关监听服务器的 `8787` 端口，可通过 `http://服务器IP:8787` 访问。主程序只在 Docker 内部网络开放。部署前需在 `/opt/xui-network-console-secrets/htpasswd` 配置管理员密码哈希。
+默认由 Nginx 鉴权网关监听服务器的 `8787` 端口，可通过 `http://服务器IP:8787` 访问。主程序只在 Docker 内部网络开放。部署前需在 `/opt/xui-network-console-secrets/htpasswd` 配置管理员密码哈希，并根据 `deploy/session-map.conf.example` 生成 `/opt/xui-network-console-secrets/session-map.conf`。首次通过密码验证后，网关会签发 30 天有效的 HttpOnly 登录 Cookie，后续成功访问会自动续期。
 
 ## 凭据与安全
 
