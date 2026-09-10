@@ -37,9 +37,26 @@ class CollectorTests(unittest.TestCase):
             payload = make_snapshot(state, ports, active, 1000)
             self.assertEqual(payload["ports"][0]["activeIpCount"], 1)
             self.assertEqual(payload["ports"][0]["ips"][0]["connections"], 1)
+            self.assertFalse(payload["ports"][0]["ips"][0]["scanner"])
             output = root / "snapshot.json"
             atomic_write_json(output, payload)
             self.assertEqual(json.loads(output.read_text())["schemaVersion"], 1)
+            state.close()
+
+    def test_short_visits_to_multiple_ports_are_scanner(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = open_state_db(Path(directory) / "state.db")
+            ports = {
+                19859: {"id": 7, "remark": "a", "protocol": "dokodemo-door"},
+                19860: {"id": 8, "remark": "b", "protocol": "dokodemo-door"},
+            }
+            record_sample(state, ports, [Connection(19859, "85.217.149.38")], 1000, 604800)
+            active = record_sample(state, ports, [Connection(19860, "85.217.149.38")], 1030, 604800)
+            payload = make_snapshot(state, ports, active, 1030)
+            entries = [item for port in payload["ports"] for item in port["ips"]]
+            self.assertTrue(all(item["scanner"] for item in entries))
+            self.assertTrue(all(item["scannedPorts"] == 2 for item in entries))
+            self.assertEqual(payload["ports"][1]["activeIpCount"], 0)
             state.close()
 
 

@@ -243,6 +243,13 @@ def make_snapshot(
         ORDER BY sightings.port, sightings.last_seen DESC
         """
     ).fetchall()
+    ip_port_durations: dict[str, list[int]] = {}
+    for _port, ip, first_seen, last_seen, _samples, _location in rows:
+        ip_port_durations.setdefault(str(ip), []).append(int(last_seen) - int(first_seen))
+    scanner_ips = {
+        ip for ip, durations in ip_port_durations.items()
+        if len(durations) >= 2 and all(duration < 60 for duration in durations)
+    }
     by_port: dict[int, list[dict[str, object]]] = {port: [] for port in ports}
     for port, ip, first_seen, last_seen, samples, location in rows:
         if port not in ports:
@@ -256,19 +263,22 @@ def make_snapshot(
                 "connections": active[(port, ip)],
                 "samples": samples,
                 "location": location,
+                "scanner": ip in scanner_ips,
+                "scannedPorts": len(ip_port_durations.get(str(ip), [])),
             }
         )
 
     output_ports = []
     for port, metadata in sorted(ports.items()):
         ips = by_port[port]
+        user_ips = [item for item in ips if not item["scanner"]]
         output_ports.append(
             {
                 "port": port,
                 **metadata,
-                "activeIpCount": sum(1 for item in ips if item["online"]),
-                "recent1h": sum(1 for item in ips if now - int(datetime.fromisoformat(str(item["lastSeen"])).timestamp()) <= 3600),
-                "recent24h": sum(1 for item in ips if now - int(datetime.fromisoformat(str(item["lastSeen"])).timestamp()) <= 86400),
+                "activeIpCount": sum(1 for item in user_ips if item["online"]),
+                "recent1h": sum(1 for item in user_ips if now - int(datetime.fromisoformat(str(item["lastSeen"])).timestamp()) <= 3600),
+                "recent24h": sum(1 for item in user_ips if now - int(datetime.fromisoformat(str(item["lastSeen"])).timestamp()) <= 86400),
                 "ips": ips,
             }
         )

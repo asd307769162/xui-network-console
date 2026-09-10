@@ -23,3 +23,5 @@ python3 xui_connection_collector.py --once --print
 The production collector samples established TCP sessions every five seconds. UDP is intentionally not collected. Its authenticated snapshot endpoint must be restricted to the central console IP.
 
 IP geolocation is resolved asynchronously over HTTPS only for previously unseen public IPs. Successful results are persisted in the same SQLite state database; failed lookups wait six hours before retrying, so the five-second TCP sampling loop does not repeatedly call the external service.
+
+An IP is classified as a scanner only when it has reached at least two monitored ports and its observed duration on every reached port is under 60 seconds. Scanner records remain visible but are excluded from concurrent-user and sharing-risk counts.
