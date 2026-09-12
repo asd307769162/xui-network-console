@@ -3,6 +3,7 @@ export const XUI_NODES = [
   { alias: 'wf2', url: 'http://38.55.148.143:54321', collectorUrl: 'http://38.55.148.143:18787/v1/snapshot' },
   { alias: 'w0', url: 'http://154.40.33.44:54321', collectorUrl: 'http://154.40.33.44:18787/v1/snapshot' },
   { alias: 'v2', url: 'http://103.15.91.249:54321', collectorUrl: 'http://103.15.91.249:18787/v1/snapshot' },
+  { alias: 'v', url: 'http://69.165.68.158:54321/1', collectorUrl: 'http://69.165.68.158:18787/v1/snapshot' },
   { alias: 'j4', url: 'http://160.16.122.233:54321', collectorUrl: 'http://160.16.122.233:18787/v1/snapshot' },
   { alias: 'j2', url: 'http://49.212.188.72:54321', collectorUrl: 'http://49.212.188.72:18787/v1/snapshot' },
   { alias: 't4', url: 'http://23.147.172.172:54321', collectorUrl: 'http://23.147.172.172:18787/v1/snapshot' },
