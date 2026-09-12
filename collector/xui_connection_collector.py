@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Low-overhead connection collector for X-UI dokodemo-door inbounds."""
 
-from __future__ import annotations
-
 import argparse
+import collections
 import hmac
 import ipaddress
 import json
@@ -14,20 +13,22 @@ import time
 import threading
 import urllib.error
 import urllib.request
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from socketserver import ThreadingMixIn
 from collections import Counter
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Dict, List
 
 
 TCP_ESTABLISHED = "01"
 
 
-@dataclass(frozen=True)
-class Connection:
-    local_port: int
-    remote_ip: str
+Connection = collections.namedtuple("Connection", ("local_port", "remote_ip"))
+
+
+class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
+    daemon_threads = True
 
 
 def decode_proc_address(value: str, ipv6: bool) -> str:
@@ -41,8 +42,8 @@ def decode_proc_address(value: str, ipv6: bool) -> str:
     return str(ipaddress.IPv4Address(raw[::-1]))
 
 
-def parse_proc_net_tcp(text: str, ipv6: bool = False) -> list[Connection]:
-    connections: list[Connection] = []
+def parse_proc_net_tcp(text: str, ipv6: bool = False) -> List[Connection]:
+    connections = []  # type: List[Connection]
     for line in text.splitlines()[1:]:
         fields = line.split()
         if len(fields) < 4 or fields[3] != TCP_ESTABLISHED:
@@ -60,8 +61,8 @@ def parse_proc_net_tcp(text: str, ipv6: bool = False) -> list[Connection]:
     return connections
 
 
-def read_connections(proc_root: Path) -> list[Connection]:
-    result: list[Connection] = []
+def read_connections(proc_root: Path) -> List[Connection]:
+    result = []  # type: List[Connection]
     for name, ipv6 in (("tcp", False), ("tcp6", True)):
         path = proc_root / name
         try:
@@ -71,7 +72,7 @@ def read_connections(proc_root: Path) -> list[Connection]:
     return result
 
 
-def read_xui_ports(db_path: Path) -> dict[int, dict[str, object]]:
+def read_xui_ports(db_path: Path) -> Dict[int, Dict[str, object]]:
     uri = f"file:{db_path}?mode=ro"
     connection = sqlite3.connect(uri, uri=True, timeout=5)
     try:
@@ -92,7 +93,7 @@ def read_xui_ports(db_path: Path) -> dict[int, dict[str, object]]:
 
 def open_state_db(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(path)
+    connection = sqlite3.connect(str(path))
     connection.execute("PRAGMA journal_mode=WAL")
     connection.execute("PRAGMA synchronous=NORMAL")
     connection.execute(
@@ -125,7 +126,7 @@ def open_state_db(path: Path) -> sqlite3.Connection:
     return connection
 
 
-def lookup_ip_location(ip: str, endpoint: str, timeout: float) -> dict[str, str]:
+def lookup_ip_location(ip: str, endpoint: str, timeout: float) -> Dict[str, str]:
     address = ipaddress.ip_address(ip)
     if not address.is_global:
         return {"location": "内网地址", "country": "", "region": "", "city": "", "isp": ""}
@@ -180,11 +181,9 @@ def resolve_one_location(state_db: Path, endpoint: str, timeout: float, retry_se
             values = (ip, "归属地查询失败", "", "", "", "", "failed", now)
         state.execute(
             """
-            INSERT INTO geo_cache(ip, location, country, region, city, isp, status, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(ip) DO UPDATE SET
-                location=excluded.location, country=excluded.country, region=excluded.region,
-                city=excluded.city, isp=excluded.isp, status=excluded.status, updated_at=excluded.updated_at
+            INSERT OR REPLACE INTO geo_cache(
+                ip, location, country, region, city, isp, status, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             values,
         )
@@ -202,27 +201,33 @@ def geo_resolver_loop(state_db: Path, endpoint: str, timeout: float, retry_secon
 
 def record_sample(
     state: sqlite3.Connection,
-    ports: dict[int, dict[str, object]],
-    connections: list[Connection],
+    ports: Dict[int, Dict[str, object]],
+    connections: List[Connection],
     now: int,
     retention_seconds: int,
-) -> Counter[tuple[int, str]]:
+) -> Counter:
     active = Counter(
         (item.local_port, item.remote_ip)
         for item in connections
         if item.local_port in ports
     )
     for (port, ip), count in active.items():
-        state.execute(
+        inserted = state.execute(
             """
-            INSERT INTO sightings(port, ip, first_seen, last_seen, samples)
+            INSERT OR IGNORE INTO sightings(port, ip, first_seen, last_seen, samples)
             VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(port, ip) DO UPDATE SET
-                last_seen=excluded.last_seen,
-                samples=sightings.samples + excluded.samples
             """,
             (port, ip, now, now, count),
         )
+        if inserted.rowcount == 0:
+            state.execute(
+                """
+                UPDATE sightings
+                SET last_seen = ?, samples = samples + ?
+                WHERE port = ? AND ip = ?
+                """,
+                (now, count, port, ip),
+            )
     state.execute("DELETE FROM sightings WHERE last_seen < ?", (now - retention_seconds,))
     state.commit()
     return active
@@ -230,10 +235,10 @@ def record_sample(
 
 def make_snapshot(
     state: sqlite3.Connection,
-    ports: dict[int, dict[str, object]],
-    active: Counter[tuple[int, str]],
+    ports: Dict[int, Dict[str, object]],
+    active: Counter,
     now: int,
-) -> dict[str, object]:
+) -> Dict[str, object]:
     rows = state.execute(
         """
         SELECT sightings.port, sightings.ip, sightings.first_seen, sightings.last_seen, sightings.samples,
@@ -243,14 +248,14 @@ def make_snapshot(
         ORDER BY sightings.port, sightings.last_seen DESC
         """
     ).fetchall()
-    ip_port_durations: dict[str, list[int]] = {}
+    ip_port_durations = {}  # type: Dict[str, List[int]]
     for _port, ip, first_seen, last_seen, _samples, _location in rows:
         ip_port_durations.setdefault(str(ip), []).append(int(last_seen) - int(first_seen))
     scanner_ips = {
         ip for ip, durations in ip_port_durations.items()
         if len(durations) >= 2 and all(duration < 60 for duration in durations)
     }
-    by_port: dict[int, list[dict[str, object]]] = {port: [] for port in ports}
+    by_port = {port: [] for port in ports}  # type: Dict[int, List[Dict[str, object]]]
     for port, ip, first_seen, last_seen, samples, location in rows:
         if port not in ports:
             continue
@@ -259,6 +264,7 @@ def make_snapshot(
                 "ip": ip,
                 "firstSeen": datetime.fromtimestamp(first_seen, timezone.utc).isoformat(),
                 "lastSeen": datetime.fromtimestamp(last_seen, timezone.utc).isoformat(),
+                "_lastSeenEpoch": int(last_seen),
                 "online": active[(port, ip)] > 0,
                 "connections": active[(port, ip)],
                 "samples": samples,
@@ -272,13 +278,17 @@ def make_snapshot(
     for port, metadata in sorted(ports.items()):
         ips = by_port[port]
         user_ips = [item for item in ips if not item["scanner"]]
+        recent1h = sum(1 for item in user_ips if now - int(item["_lastSeenEpoch"]) <= 3600)
+        recent24h = sum(1 for item in user_ips if now - int(item["_lastSeenEpoch"]) <= 86400)
+        for item in ips:
+            item.pop("_lastSeenEpoch", None)
         output_ports.append(
             {
                 "port": port,
                 **metadata,
                 "activeIpCount": sum(1 for item in user_ips if item["online"]),
-                "recent1h": sum(1 for item in user_ips if now - int(datetime.fromisoformat(str(item["lastSeen"])).timestamp()) <= 3600),
-                "recent24h": sum(1 for item in user_ips if now - int(datetime.fromisoformat(str(item["lastSeen"])).timestamp()) <= 86400),
+                "recent1h": recent1h,
+                "recent24h": recent24h,
                 "ips": ips,
             }
         )
@@ -290,7 +300,7 @@ def make_snapshot(
     }
 
 
-def atomic_write_json(path: Path, payload: dict[str, object]) -> None:
+def atomic_write_json(path: Path, payload: Dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(
@@ -330,7 +340,7 @@ def start_http_server(output: Path, listen: str, port: int, token: str, allow_ip
     return server
 
 
-def collect_once(args: argparse.Namespace, state: sqlite3.Connection, ports: dict[int, dict[str, object]]):
+def collect_once(args: argparse.Namespace, state: sqlite3.Connection, ports: Dict[int, Dict[str, object]]):
     now = int(time.time())
     connections = read_connections(args.proc_root)
     active = record_sample(state, ports, connections, now, args.retention_days * 86400)
@@ -387,7 +397,7 @@ def main() -> int:
 
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
-    ports: dict[int, dict[str, object]] = {}
+    ports = {}  # type: Dict[int, Dict[str, object]]
     next_refresh = 0.0
     try:
         while not stopping:
