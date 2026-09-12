@@ -13,6 +13,35 @@ type ClientIp = { ip: string; location: string; connections?: number; firstSeen?
 type Port = { id: number; port: number; protocol: string; enabled: boolean; upload: number; download: number; ips: ClientIp[]; recent1h?: number; recent24h?: number; overlapMinutes?: number; trusted?: boolean; observing?: boolean };
 type Node = { alias: string; ip: string; region: string; online: boolean; ports: Port[] };
 type ModelContext = { registerTool: (tool: Record<string, unknown>, options?: { signal?: AbortSignal }) => void | Promise<void> };
+type PortFlags = Record<string, { trusted?: boolean; observing?: boolean }>;
+
+const PORT_FLAGS_STORAGE_KEY = 'xui-network-console.port-flags.v1';
+
+const portFlagKey = (alias: string, id: number) => `${alias.toLowerCase()}:${id}`;
+
+function readPortFlags(): PortFlags {
+  try {
+    const stored = window.localStorage.getItem(PORT_FLAGS_STORAGE_KEY);
+    return stored ? JSON.parse(stored) as PortFlags : {};
+  } catch {
+    return {};
+  }
+}
+
+function writePortFlags(flags: PortFlags) {
+  try {
+    window.localStorage.setItem(PORT_FLAGS_STORAGE_KEY, JSON.stringify(flags));
+  } catch {
+    // The UI state still updates when storage is unavailable.
+  }
+}
+
+function applyPortFlags(nodes: Node[], flags: PortFlags) {
+  return nodes.map((node) => ({
+    ...node,
+    ports: node.ports.map((port) => ({ ...port, ...flags[portFlagKey(node.alias, port.id)] })),
+  }));
+}
 
 const initialNodes: Node[] = [
   { alias: 'T4', ip: '23.147.172.172', region: '美国 · 洛杉矶', online: true, ports: [
@@ -86,7 +115,21 @@ export default function Home() {
   }).sort((a, b) => riskFor(b).level - riskFor(a).level) })).filter((node) => node.ports.length > 0).sort((a, b) => Math.max(...b.ports.map((port) => riskFor(port).level)) - Math.max(...a.ports.map((port) => riskFor(port).level))), [nodes, query, status]);
 
   const setPortFlag = (alias: string, id: number, flag: 'trusted' | 'observing') => {
-    setNodes((current) => current.map((node) => node.alias === alias ? { ...node, ports: node.ports.map((port) => port.id === id ? { ...port, [flag]: !port[flag] } : port) } : node));
+    setNodes((current) => {
+      let nextValue = false;
+      const next = current.map((node) => node.alias === alias ? { ...node, ports: node.ports.map((port) => {
+        if (port.id !== id) return port;
+        nextValue = !port[flag];
+        return { ...port, [flag]: nextValue };
+      }) } : node);
+      const flags = readPortFlags();
+      const key = portFlagKey(alias, id);
+      const entry = { ...flags[key], [flag]: nextValue };
+      if (!entry.trusted && !entry.observing) delete flags[key];
+      else flags[key] = entry;
+      writePortFlags(flags);
+      return next;
+    });
     setMessage(flag === 'trusted' ? '已更新可信标记。' : '已更新观察状态；自动关闭端口保持关闭。');
   };
 
@@ -97,7 +140,7 @@ export default function Home() {
       const response = await fetch('/api/xui/snapshot');
       const data = await response.json() as { nodes?: Node[]; error?: string };
       if (!response.ok || !data.nodes) throw new Error(data.error || '实时读取失败');
-      setNodes(data.nodes);
+      setNodes(applyPortFlags(data.nodes, readPortFlags()));
       setSource('live');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '实时读取失败');
