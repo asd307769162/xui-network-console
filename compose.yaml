@@ -8,6 +8,7 @@ services:
       XUI_PASSWORD: ${XUI_PASSWORD:-}
       COLLECTOR_TOKEN: ${COLLECTOR_TOKEN:-}
       COLLECTOR_TOKEN_J4: ${COLLECTOR_TOKEN_J4:-}
+      COLLECTOR_TOKEN_T4: ${COLLECTOR_TOKEN_T4:-}
     volumes:
       - ./.env:/app/dist/server/.dev.vars:ro
     expose:

@@ -2,6 +2,7 @@ export const XUI_NODES = [
   { alias: 'wf3', url: 'http://38.55.148.140:54321' },
   { alias: 'v2', url: 'http://103.15.91.249:54321', collectorUrl: 'http://103.15.91.249:18787/v1/snapshot' },
   { alias: 'j4', url: 'http://160.16.122.233:54321', collectorUrl: 'http://160.16.122.233:18787/v1/snapshot' },
+  { alias: 't4', url: 'http://23.147.172.172:54321', collectorUrl: 'http://23.147.172.172:18787/v1/snapshot' },
 ] as const;
 
 type JsonRecord = Record<string, unknown>;
