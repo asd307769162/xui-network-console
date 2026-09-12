@@ -11,6 +11,7 @@ services:
       COLLECTOR_TOKEN_T4: ${COLLECTOR_TOKEN_T4:-}
       COLLECTOR_TOKEN_WF2: ${COLLECTOR_TOKEN_WF2:-}
       COLLECTOR_TOKEN_T1: ${COLLECTOR_TOKEN_T1:-}
+      COLLECTOR_TOKEN_W0: ${COLLECTOR_TOKEN_W0:-}
     volumes:
       - ./.env:/app/dist/server/.dev.vars:ro
     expose:
