@@ -1,23 +1,10 @@
+import { publicIp, readCollector } from '@/lib/collector';
 import { XUI_NODES, listInbounds } from '@/lib/xui';
 
-type CollectorIp = { ip: string; location?: string; firstSeen?: string; lastSeen?: string; online?: boolean; connections?: number; scanner?: boolean; scannedPorts?: number };
-type CollectorPort = { port: number; recent1h?: number; recent24h?: number; ips?: CollectorIp[] };
+let cachedSnapshot: { expires: number; value: unknown } | undefined;
+let pendingSnapshot: Promise<unknown> | undefined;
 
-async function readCollector(node: (typeof XUI_NODES)[number]) {
-  if (!('collectorUrl' in node)) return new Map<number, CollectorPort>();
-  const token = process.env[`COLLECTOR_TOKEN_${node.alias.toUpperCase()}`] || process.env.COLLECTOR_TOKEN;
-  if (!token) throw new Error('采集器凭据尚未配置');
-  const response = await fetch(node.collectorUrl, {
-    headers: { authorization: `Bearer ${token}` },
-    cache: 'no-store',
-    signal: AbortSignal.timeout(5_000),
-  });
-  if (!response.ok) throw new Error(`采集器返回 ${response.status}`);
-  const payload = await response.json() as { ports?: CollectorPort[] };
-  return new Map((payload.ports || []).map((port) => [Number(port.port), port]));
-}
-
-export async function GET() {
+async function createSnapshot() {
   const results = await Promise.all(XUI_NODES.map(async (node) => {
     try {
       const [{ inbounds }, collected] = await Promise.all([listInbounds(node.alias), readCollector(node)]);
@@ -28,6 +15,10 @@ export async function GET() {
         online: true,
         ports: inbounds.map((item) => {
           const observed = collected.get(Number(item.port));
+          const allIps = observed?.ips || [];
+          const activeIps = allIps.filter((entry) => entry.online !== false && !entry.scanner);
+          const activeRegions = new Set(activeIps.map((entry) => (entry.location || '').split('·').slice(0, 3).join('·')));
+          const activeNetworks = new Set(activeIps.map((entry) => (entry.location || '').split('·').slice(-2).join('·')));
           return ({
           id: Number(item.id),
           port: Number(item.port),
@@ -35,16 +26,11 @@ export async function GET() {
           enabled: Boolean(item.enable),
           upload: Number(item.up || 0) / 1024 ** 3,
           download: Number(item.down || 0) / 1024 ** 3,
-          ips: (observed?.ips || []).map((entry) => ({
-            ip: entry.ip,
-            location: entry.location || '归属地查询中',
-            firstSeen: entry.firstSeen,
-            lastSeen: entry.lastSeen,
-            online: entry.online,
-            connections: entry.connections,
-            scanner: entry.scanner,
-            scannedPorts: entry.scannedPorts,
-          })),
+          ips: allIps.slice(0, 3).map(publicIp),
+          totalIps: allIps.length,
+          activeIpCount: activeIps.length,
+          activeRegionCount: activeRegions.size,
+          activeNetworkCount: activeNetworks.size,
           recent1h: observed?.recent1h,
           recent24h: observed?.recent24h,
         }); }),
@@ -53,5 +39,15 @@ export async function GET() {
       return { alias: node.alias.toUpperCase(), ip: new URL(node.url).hostname, region: error instanceof Error ? error.message : '读取失败', online: false, ports: [] };
     }
   }));
-  return Response.json({ nodes: results, collectedAt: new Date().toISOString() });
+  return { nodes: results, collectedAt: new Date().toISOString() };
+}
+
+export async function GET() {
+  const now = Date.now();
+  if (cachedSnapshot && cachedSnapshot.expires > now) return Response.json(cachedSnapshot.value, { headers: { 'cache-control': 'private, max-age=5' } });
+  pendingSnapshot ??= createSnapshot().then((value) => {
+    cachedSnapshot = { expires: Date.now() + 5_000, value };
+    return value;
+  }).finally(() => { pendingSnapshot = undefined; });
+  return Response.json(await pendingSnapshot, { headers: { 'cache-control': 'private, max-age=5' } });
 }

@@ -11,7 +11,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 
 type ClientIp = { ip: string; location: string; connections?: number; firstSeen?: string; lastSeen?: string; online?: boolean; isNew?: boolean; scanner?: boolean; scannedPorts?: number };
-type Port = { id: number; port: number; protocol: string; enabled: boolean; upload: number; download: number; ips: ClientIp[]; recent1h?: number; recent24h?: number; overlapMinutes?: number; trusted?: boolean; observing?: boolean; note?: string };
+type Port = { id: number; port: number; protocol: string; enabled: boolean; upload: number; download: number; ips: ClientIp[]; totalIps?: number; activeIpCount?: number; activeRegionCount?: number; activeNetworkCount?: number; recent1h?: number; recent24h?: number; overlapMinutes?: number; trusted?: boolean; observing?: boolean; note?: string };
 type Node = { alias: string; ip: string; region: string; online: boolean; ports: Port[] };
 type ModelContext = { registerTool: (tool: Record<string, unknown>, options?: { signal?: AbortSignal }) => void | Promise<void> };
 type PortFlags = Record<string, { trusted?: boolean; observing?: boolean }>;
@@ -91,14 +91,15 @@ function riskFor(port: Port) {
   const active = port.ips.filter((item) => item.online !== false && !item.scanner);
   const regions = new Set(active.map((item) => item.location.split('·').slice(0, 3).join('·')));
   const networks = new Set(active.map((item) => item.location.split('·').slice(-2).join('·')));
-  const crossRegion = regions.size > 1;
-  const crossNetwork = networks.size > 1;
+  const activeCount = port.activeIpCount ?? active.length;
+  const crossRegion = (port.activeRegionCount ?? regions.size) > 1;
+  const crossNetwork = (port.activeNetworkCount ?? networks.size) > 1;
   if (port.trusted) return { level: 0, label: '已信任', reason: '已人工确认', tone: 'text-sky-300 bg-sky-400/10 border-sky-400/15', crossRegion };
-  if (active.length >= 3) return { level: 3, label: '高风险', reason: `${active.length} 个 IP 同时活跃`, tone: 'text-rose-300 bg-rose-400/10 border-rose-400/20', crossRegion };
-  if (active.length >= 2 && (crossRegion || crossNetwork)) return { level: 3, label: '高风险', reason: `跨地区/运营商重叠 ${port.overlapMinutes || 0} 分钟`, tone: 'text-rose-300 bg-rose-400/10 border-rose-400/20', crossRegion };
-  if (active.length >= 2) return { level: 2, label: '疑似共享', reason: `同时活跃 ${port.overlapMinutes || 0} 分钟`, tone: 'text-amber-300 bg-amber-400/10 border-amber-400/20', crossRegion };
-  if ((port.recent24h || active.length) >= 3) return { level: 1, label: '观察', reason: '24 小时出现多个 IP', tone: 'text-violet-300 bg-violet-400/10 border-violet-400/20', crossRegion };
-  return { level: 0, label: '正常', reason: active.length ? '未发现并发' : '暂无活跃 IP', tone: 'text-emerald-300 bg-emerald-400/10 border-emerald-400/15', crossRegion };
+  if (activeCount >= 3) return { level: 3, label: '高风险', reason: `${activeCount} 个 IP 同时活跃`, tone: 'text-rose-300 bg-rose-400/10 border-rose-400/20', crossRegion };
+  if (activeCount >= 2 && (crossRegion || crossNetwork)) return { level: 3, label: '高风险', reason: `跨地区/运营商重叠 ${port.overlapMinutes || 0} 分钟`, tone: 'text-rose-300 bg-rose-400/10 border-rose-400/20', crossRegion };
+  if (activeCount >= 2) return { level: 2, label: '疑似共享', reason: `同时活跃 ${port.overlapMinutes || 0} 分钟`, tone: 'text-amber-300 bg-amber-400/10 border-amber-400/20', crossRegion };
+  if ((port.recent24h || activeCount) >= 3) return { level: 1, label: '观察', reason: '24 小时出现多个 IP', tone: 'text-violet-300 bg-violet-400/10 border-violet-400/20', crossRegion };
+  return { level: 0, label: '正常', reason: activeCount ? '未发现并发' : '暂无活跃 IP', tone: 'text-emerald-300 bg-emerald-400/10 border-emerald-400/15', crossRegion };
 }
 
 export default function Home() {
@@ -262,14 +263,19 @@ export default function Home() {
 }
 
 function NodePanel({ node, setPending, setPortFlag, setMessage }: { node: Node; setPending: (value: { alias: string; id: number; next: boolean }) => void; setPortFlag: (alias: string, id: number, flag: 'trusted' | 'observing') => void; setMessage: (value: string) => void }) {
-  return <Collapsible defaultOpen><section className="overflow-hidden rounded-2xl border border-white/8 bg-[#0b1622] shadow-[0_18px_55px_rgba(0,0,0,.18)]">
+  const [open, setOpen] = useState(false);
+  return <Collapsible open={open} onOpenChange={setOpen}><section className="overflow-hidden rounded-2xl border border-white/8 bg-[#0b1622] shadow-[0_18px_55px_rgba(0,0,0,.18)]">
     <CollapsibleTrigger className="group flex w-full items-center justify-between gap-4 px-4 py-4 text-left sm:px-5"><div className="flex min-w-0 items-center gap-3"><span className={`size-2.5 shrink-0 rounded-full ${node.online ? 'bg-emerald-400 shadow-[0_0_12px_rgba(52,211,153,.75)]' : 'bg-rose-400'}`} /><div className="min-w-0"><div className="flex items-center gap-2"><h2 className="font-semibold">{node.alias}</h2><Badge variant="outline" className="border-white/10 text-slate-400">{node.ports.length} 端口</Badge></div><p className="truncate text-sm text-slate-500">{node.ip} · {node.region}</p></div></div><ChevronDown className="size-5 text-slate-500 transition-transform group-data-panel-open:rotate-180" /></CollapsibleTrigger>
-    <CollapsibleContent><div className="border-t border-white/8">{node.ports.map((port) => <PortRow key={port.id} node={node} port={port} setPending={setPending} setPortFlag={setPortFlag} setMessage={setMessage} />)}</div></CollapsibleContent>
+    {open && <CollapsibleContent><div className="border-t border-white/8">{node.ports.map((port) => <PortRow key={port.id} node={node} port={port} setPending={setPending} setPortFlag={setPortFlag} setMessage={setMessage} />)}</div></CollapsibleContent>}
   </section></Collapsible>;
 }
 
 function PortRow({ node, port, setPending, setPortFlag, setMessage }: { node: Node; port: Port; setPending: (value: { alias: string; id: number; next: boolean }) => void; setPortFlag: (alias: string, id: number, flag: 'trusted' | 'observing') => void; setMessage: (value: string) => void }) {
   const [showAllIps, setShowAllIps] = useState(false);
+  const [visibleIpLimit, setVisibleIpLimit] = useState(100);
+  const [allIps, setAllIps] = useState<ClientIp[] | null>(null);
+  const [loadingIps, setLoadingIps] = useState(false);
+  const [ipError, setIpError] = useState('');
   const [note, setNote] = useState('');
   const [savedNote, setSavedNote] = useState('');
   const [noteLoaded, setNoteLoaded] = useState(false);
@@ -298,13 +304,28 @@ function PortRow({ node, port, setPending, setPortFlag, setMessage }: { node: No
   };
   const total = port.upload + port.download;
   const risk = riskFor(port);
-  const active = port.ips.filter((item) => item.online !== false && !item.scanner);
-  const shown = showAllIps || risk.level >= 2 ? port.ips : port.ips.slice(0, 3);
+  const displayedIps = showAllIps && allIps ? allIps : port.ips;
+  const active = displayedIps.filter((item) => item.online !== false && !item.scanner);
+  const activeCount = port.activeIpCount ?? active.length;
+  const totalIps = port.totalIps ?? port.ips.length;
+  const shown = displayedIps.slice(0, showAllIps ? visibleIpLimit : 3);
+  const toggleIps = async () => {
+    if (showAllIps && allIps && visibleIpLimit < allIps.length) { setVisibleIpLimit((current) => Math.min(current + 100, allIps.length)); return; }
+    if (allIps) { setVisibleIpLimit(100); setShowAllIps(true); return; }
+    setLoadingIps(true); setIpError('');
+    try {
+      const response = await fetch(`/api/xui/port-ips?alias=${encodeURIComponent(node.alias)}&port=${port.port}`);
+      const data = await response.json() as { ips?: ClientIp[]; error?: string };
+      if (!response.ok || !data.ips) throw new Error(data.error || 'IP 记录读取失败');
+      setAllIps(data.ips); setVisibleIpLimit(100); setShowAllIps(true);
+    } catch (error) { setIpError(error instanceof Error ? error.message : 'IP 记录读取失败'); }
+    finally { setLoadingIps(false); }
+  };
   return <div className={`border-t first:border-t-0 ${risk.level >= 3 ? 'border-rose-400/15 bg-rose-400/[.018]' : 'border-white/6'}`}><div className="grid gap-3 px-4 py-4 sm:px-5 lg:grid-cols-[90px_100px_120px_minmax(360px,1fr)_160px_210px] lg:items-center lg:gap-3">
     <DataCell label="端口"><span className="font-mono text-base font-semibold text-cyan-200">{port.port}</span></DataCell>
     <DataCell label="状态"><Badge className={port.enabled ? 'bg-emerald-400/12 text-emerald-300' : 'bg-slate-600/20 text-slate-400'}>{port.enabled ? '已启用' : '已停用'}</Badge></DataCell>
     <DataCell label="累计流量"><span className="text-base font-medium text-slate-200">{formatTraffic(total)}</span></DataCell>
-    <div className="min-w-0"><div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500"><span className={active.length >= 2 ? 'font-semibold text-amber-300' : ''}>当前 {active.length}</span><span>1小时 {port.recent1h ?? port.ips.length}</span><span>24小时 {port.recent24h ?? port.ips.length}</span></div><div className="flex flex-wrap gap-2">{shown.length ? shown.map((item) => <div key={item.ip} className={`min-w-[250px] flex-1 rounded-xl border px-3 py-2.5 ${item.scanner ? 'border-slate-500/20 bg-slate-500/[.035]' : active.length > 1 ? 'border-amber-400/20 bg-amber-400/[.045]' : 'border-white/8 bg-white/[.03]'}`}><div className="flex items-center gap-2"><Globe2 className={`size-4 shrink-0 ${item.scanner ? 'text-slate-400' : 'text-amber-300'}`} /><p className="min-w-0 flex-1 truncate font-mono text-sm font-medium text-slate-100">{item.ip}</p>{item.scanner && <Badge className="bg-slate-400/12 text-slate-300">扫描 IP · {item.scannedPorts}端口</Badge>}{item.isNew && !item.scanner && <Badge className="bg-violet-400/10 text-violet-300">新</Badge>}</div><div className="mt-2 rounded-md border border-cyan-400/10 bg-cyan-400/[.055] px-2 py-1.5"><p className="flex items-center gap-1.5 truncate text-xs font-medium text-cyan-200"><MapPin className="size-3.5 shrink-0 text-cyan-300" /><span className="text-cyan-400/70">归属</span>{item.location}</p></div><div className="mt-1.5 flex items-start gap-1.5 rounded-md border border-violet-400/10 bg-violet-400/[.045] px-2 py-1.5 text-[11px] leading-4 text-violet-200"><Clock3 className="mt-0.5 size-3.5 shrink-0 text-violet-300" /><div className="min-w-0"><p><span className="text-violet-400/70">首次</span> {formatSeenAt(item.firstSeen)}</p><p><span className="text-violet-400/70">最后</span> {item.online ? '当前在线' : formatSeenAt(item.lastSeen)}</p></div></div></div>) : <div className="rounded-lg border border-dashed border-white/8 px-3 py-2 text-sm text-slate-600">最近没有活跃 IP</div>}{port.ips.length > 3 && risk.level < 2 && <Button type="button" size="sm" variant="ghost" onClick={() => setShowAllIps((current) => !current)} aria-expanded={showAllIps} className="self-center text-slate-400 hover:bg-white/5 hover:text-cyan-200">{showAllIps ? '收起 IP' : `展开另外 ${port.ips.length - 3} 个 IP`}<ChevronDown className={`size-4 transition-transform ${showAllIps ? 'rotate-180' : ''}`} /></Button>}</div></div>
+    <div className="min-w-0"><div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500"><span className={activeCount >= 2 ? 'font-semibold text-amber-300' : ''}>当前 {activeCount}</span><span>1小时 {port.recent1h ?? totalIps}</span><span>24小时 {port.recent24h ?? totalIps}</span></div><div className="flex flex-wrap gap-2">{shown.length ? shown.map((item) => <div key={item.ip} className={`min-w-[250px] flex-1 rounded-xl border px-3 py-2.5 ${item.scanner ? 'border-slate-500/20 bg-slate-500/[.035]' : activeCount > 1 ? 'border-amber-400/20 bg-amber-400/[.045]' : 'border-white/8 bg-white/[.03]'}`}><div className="flex items-center gap-2"><Globe2 className={`size-4 shrink-0 ${item.scanner ? 'text-slate-400' : 'text-amber-300'}`} /><p className="min-w-0 flex-1 truncate font-mono text-sm font-medium text-slate-100">{item.ip}</p>{item.scanner && <Badge className="bg-slate-400/12 text-slate-300">扫描 IP · {item.scannedPorts}端口</Badge>}{item.isNew && !item.scanner && <Badge className="bg-violet-400/10 text-violet-300">新</Badge>}</div><div className="mt-2 rounded-md border border-cyan-400/10 bg-cyan-400/[.055] px-2 py-1.5"><p className="flex items-center gap-1.5 truncate text-xs font-medium text-cyan-200"><MapPin className="size-3.5 shrink-0 text-cyan-300" /><span className="text-cyan-400/70">归属</span>{item.location}</p></div><div className="mt-1.5 flex items-start gap-1.5 rounded-md border border-violet-400/10 bg-violet-400/[.045] px-2 py-1.5 text-[11px] leading-4 text-violet-200"><Clock3 className="mt-0.5 size-3.5 shrink-0 text-violet-300" /><div className="min-w-0"><p><span className="text-violet-400/70">首次</span> {formatSeenAt(item.firstSeen)}</p><p><span className="text-violet-400/70">最后</span> {item.online ? '当前在线' : formatSeenAt(item.lastSeen)}</p></div></div></div>) : <div className="rounded-lg border border-dashed border-white/8 px-3 py-2 text-sm text-slate-600">最近没有活跃 IP</div>}{totalIps > 3 && (!showAllIps || (allIps && shown.length < allIps.length)) && <Button type="button" size="sm" variant="ghost" onClick={toggleIps} disabled={loadingIps} aria-expanded={showAllIps} className="self-center text-slate-400 hover:bg-white/5 hover:text-cyan-200">{loadingIps ? '读取中…' : showAllIps && allIps ? `继续显示 ${Math.min(100, allIps.length - shown.length)} 个` : `展开另外 ${totalIps - 3} 个 IP`}<ChevronDown className="size-4" /></Button>}{showAllIps && <Button type="button" size="sm" variant="ghost" onClick={() => setShowAllIps(false)} className="self-center text-slate-400 hover:bg-white/5 hover:text-cyan-200">收起 IP<ChevronDown className="size-4 rotate-180" /></Button>}{ipError && <p role="alert" className="self-center text-sm text-rose-300">{ipError}</p>}</div></div>
     <div><Badge variant="outline" className={`border ${risk.tone}`}>{risk.label}</Badge><p className="mt-2 text-xs leading-5 text-slate-500">{risk.reason}</p>{(port.overlapMinutes || 0) > 0 && <p className="text-xs text-slate-600">重叠 {port.overlapMinutes} 分钟</p>}</div>
     <div className="flex flex-wrap items-center justify-end gap-1.5"><Button size="sm" variant="ghost" onClick={() => setPortFlag(node.alias, port.id, 'observing')} className={port.observing ? 'bg-violet-400/10 text-violet-300' : 'text-slate-400'}><Eye className="size-3.5" />观察</Button><Button size="sm" variant="ghost" onClick={() => setPortFlag(node.alias, port.id, 'trusted')} className={port.trusted ? 'bg-sky-400/10 text-sky-300' : 'text-slate-400'}><ShieldCheck className="size-3.5" />可信</Button><Button size="sm" variant="ghost" onClick={() => setMessage(`${node.alias}-${port.port} 的 7 天记录将在采集器接入后显示。`)} className="text-slate-400"><History className="size-3.5" />7天</Button><Switch checked={port.enabled} onCheckedChange={(next) => setPending({ alias: node.alias, id: port.id, next })} aria-label={`${port.enabled ? '停用' : '启用'} ${node.alias} 端口 ${port.port}`} /></div>
     <div className="space-y-2 lg:col-start-6"><Textarea value={note} onChange={(event) => setNote(event.target.value)} disabled={!noteLoaded || savingNote} maxLength={2000} rows={2} aria-label={`${node.alias} 端口 ${port.port} 处理备注`} placeholder={noteLoaded ? '输入处理备注…' : '正在读取备注…'} className="min-h-16 border-white/15 bg-[#071019] text-sm text-slate-100 placeholder:text-slate-500" /><div className="flex items-center justify-between gap-2"><span className="text-xs text-slate-400" role="status">{noteLoaded && (note === savedNote ? '已保存' : '未保存')}</span><Button size="sm" onClick={saveNote} disabled={!noteLoaded || savingNote || note === savedNote} className="bg-cyan-400 text-slate-950 hover:bg-cyan-300">{savingNote ? '保存中' : '保存备注'}</Button></div>{noteError && <p role="alert" className="text-sm text-rose-300">{noteError}</p>}</div>
