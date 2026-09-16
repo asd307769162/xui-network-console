@@ -154,7 +154,8 @@ export default function Home() {
     const haystack = `${node.alias} ${node.ip} ${port.port} ${port.protocol} ${port.ips.map((item) => `${item.ip} ${item.location}`).join(' ')}`.toLowerCase();
     const matches = haystack.includes(query.toLowerCase());
     const risk = riskFor(port);
-    const stateMatches = status === 'all' || (status === 'enabled' && port.enabled) || (status === 'disabled' && !port.enabled) || (status === 'concurrent' && port.ips.filter((item) => item.online !== false && !item.scanner).length >= 2) || (status === 'crossRegion' && risk.crossRegion) || (status === 'newIp' && port.ips.some((item) => item.isNew && !item.scanner)) || (status === 'trusted' && port.trusted);
+    const activeCount = port.activeIpCount ?? port.ips.filter((item) => item.online !== false && !item.scanner).length;
+    const stateMatches = status === 'all' || (status === 'enabled' && port.enabled) || (status === 'disabled' && !port.enabled) || (status === 'concurrent' && !port.trusted && activeCount >= 2) || (status === 'crossRegion' && !port.trusted && risk.crossRegion) || (status === 'newIp' && port.ips.some((item) => item.isNew && !item.scanner)) || (status === 'trusted' && port.trusted);
     return matches && stateMatches;
   }).sort((a, b) => riskFor(b).level - riskFor(a).level) })).filter((node) => node.ports.length > 0).sort((a, b) => Math.max(...b.ports.map((port) => riskFor(port).level)) - Math.max(...a.ports.map((port) => riskFor(port).level))), [nodes, query, status]);
 
