@@ -5,12 +5,13 @@ import { Activity, AlertTriangle, ChevronDown, CircleGauge, Clock3, Eye, Filter,
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 
 type ClientIp = { ip: string; location: string; connections?: number; firstSeen?: string; lastSeen?: string; online?: boolean; isNew?: boolean; scanner?: boolean; scannedPorts?: number };
-type Port = { id: number; port: number; protocol: string; enabled: boolean; upload: number; download: number; ips: ClientIp[]; recent1h?: number; recent24h?: number; overlapMinutes?: number; trusted?: boolean; observing?: boolean };
+type Port = { id: number; port: number; protocol: string; enabled: boolean; upload: number; download: number; ips: ClientIp[]; recent1h?: number; recent24h?: number; overlapMinutes?: number; trusted?: boolean; observing?: boolean; note?: string };
 type Node = { alias: string; ip: string; region: string; online: boolean; ports: Port[] };
 type ModelContext = { registerTool: (tool: Record<string, unknown>, options?: { signal?: AbortSignal }) => void | Promise<void> };
 type PortFlags = Record<string, { trusted?: boolean; observing?: boolean }>;
@@ -18,6 +19,16 @@ type PortFlags = Record<string, { trusted?: boolean; observing?: boolean }>;
 const PORT_FLAGS_STORAGE_KEY = 'xui-network-console.port-flags.v1';
 
 const portFlagKey = (alias: string, id: number) => `${alias.toLowerCase()}:${id}`;
+
+let notesRequest: Promise<Record<string, string>> | undefined;
+function loadPortNotes() {
+  notesRequest ??= fetch('/api/xui/notes').then(async (response) => {
+    const data = await response.json() as { notes?: Record<string, string>; error?: string };
+    if (!response.ok || !data.notes) throw new Error(data.error || '备注读取失败');
+    return data.notes;
+  }).catch((error) => { notesRequest = undefined; throw error; });
+  return notesRequest;
+}
 
 function readPortFlags(): PortFlags {
   try {
@@ -258,17 +269,45 @@ function NodePanel({ node, setPending, setPortFlag, setMessage }: { node: Node; 
 }
 
 function PortRow({ node, port, setPending, setPortFlag, setMessage }: { node: Node; port: Port; setPending: (value: { alias: string; id: number; next: boolean }) => void; setPortFlag: (alias: string, id: number, flag: 'trusted' | 'observing') => void; setMessage: (value: string) => void }) {
+  const [showAllIps, setShowAllIps] = useState(false);
+  const [note, setNote] = useState('');
+  const [savedNote, setSavedNote] = useState('');
+  const [noteLoaded, setNoteLoaded] = useState(false);
+  const [savingNote, setSavingNote] = useState(false);
+  const [noteError, setNoteError] = useState('');
+  useEffect(() => {
+    const controller = new AbortController();
+    loadPortNotes().then((notes) => {
+      if (controller.signal.aborted) return;
+      const value = notes[portFlagKey(node.alias, port.id)] || '';
+      setNote(value); setSavedNote(value); setNoteLoaded(true);
+    }).catch((error) => { if (!controller.signal.aborted) setNoteError(error instanceof Error ? error.message : '备注读取失败'); });
+    return () => controller.abort();
+  }, [node.alias, port.id]);
+  const saveNote = async () => {
+    setSavingNote(true); setNoteError('');
+    try {
+      const response = await fetch('/api/xui/notes', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ alias: node.alias, id: port.id, note }) });
+      const data = await response.json() as { note?: string; error?: string };
+      if (!response.ok || typeof data.note !== 'string') throw new Error(data.error || '备注保存失败');
+      const notes = await loadPortNotes();
+      notes[portFlagKey(node.alias, port.id)] = data.note;
+      setSavedNote(data.note);
+    } catch (error) { setNoteError(error instanceof Error ? error.message : '备注保存失败'); }
+    finally { setSavingNote(false); }
+  };
   const total = port.upload + port.download;
   const risk = riskFor(port);
   const active = port.ips.filter((item) => item.online !== false && !item.scanner);
-  const shown = risk.level >= 2 ? port.ips : port.ips.slice(0, 3);
+  const shown = showAllIps || risk.level >= 2 ? port.ips : port.ips.slice(0, 3);
   return <div className={`border-t first:border-t-0 ${risk.level >= 3 ? 'border-rose-400/15 bg-rose-400/[.018]' : 'border-white/6'}`}><div className="grid gap-3 px-4 py-4 sm:px-5 lg:grid-cols-[90px_100px_120px_minmax(360px,1fr)_160px_210px] lg:items-center lg:gap-3">
     <DataCell label="端口"><span className="font-mono text-base font-semibold text-cyan-200">{port.port}</span></DataCell>
     <DataCell label="状态"><Badge className={port.enabled ? 'bg-emerald-400/12 text-emerald-300' : 'bg-slate-600/20 text-slate-400'}>{port.enabled ? '已启用' : '已停用'}</Badge></DataCell>
     <DataCell label="累计流量"><span className="text-base font-medium text-slate-200">{formatTraffic(total)}</span></DataCell>
-    <div className="min-w-0"><div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500"><span className={active.length >= 2 ? 'font-semibold text-amber-300' : ''}>当前 {active.length}</span><span>1小时 {port.recent1h ?? port.ips.length}</span><span>24小时 {port.recent24h ?? port.ips.length}</span></div><div className="flex flex-wrap gap-2">{shown.length ? shown.map((item) => <div key={item.ip} className={`min-w-[250px] flex-1 rounded-xl border px-3 py-2.5 ${item.scanner ? 'border-slate-500/20 bg-slate-500/[.035]' : active.length > 1 ? 'border-amber-400/20 bg-amber-400/[.045]' : 'border-white/8 bg-white/[.03]'}`}><div className="flex items-center gap-2"><Globe2 className={`size-4 shrink-0 ${item.scanner ? 'text-slate-400' : 'text-amber-300'}`} /><p className="min-w-0 flex-1 truncate font-mono text-sm font-medium text-slate-100">{item.ip}</p>{item.scanner && <Badge className="bg-slate-400/12 text-slate-300">扫描 IP · {item.scannedPorts}端口</Badge>}{item.isNew && !item.scanner && <Badge className="bg-violet-400/10 text-violet-300">新</Badge>}</div><div className="mt-2 rounded-md border border-cyan-400/10 bg-cyan-400/[.055] px-2 py-1.5"><p className="flex items-center gap-1.5 truncate text-xs font-medium text-cyan-200"><MapPin className="size-3.5 shrink-0 text-cyan-300" /><span className="text-cyan-400/70">归属</span>{item.location}</p></div><div className="mt-1.5 flex items-start gap-1.5 rounded-md border border-violet-400/10 bg-violet-400/[.045] px-2 py-1.5 text-[11px] leading-4 text-violet-200"><Clock3 className="mt-0.5 size-3.5 shrink-0 text-violet-300" /><div className="min-w-0"><p><span className="text-violet-400/70">首次</span> {formatSeenAt(item.firstSeen)}</p><p><span className="text-violet-400/70">最后</span> {item.online ? '当前在线' : formatSeenAt(item.lastSeen)}</p></div></div></div>) : <div className="rounded-lg border border-dashed border-white/8 px-3 py-2 text-sm text-slate-600">最近没有活跃 IP</div>}{port.ips.length > shown.length && <div className="self-center text-xs text-slate-500">另外 {port.ips.length - shown.length} 个</div>}</div></div>
+    <div className="min-w-0"><div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500"><span className={active.length >= 2 ? 'font-semibold text-amber-300' : ''}>当前 {active.length}</span><span>1小时 {port.recent1h ?? port.ips.length}</span><span>24小时 {port.recent24h ?? port.ips.length}</span></div><div className="flex flex-wrap gap-2">{shown.length ? shown.map((item) => <div key={item.ip} className={`min-w-[250px] flex-1 rounded-xl border px-3 py-2.5 ${item.scanner ? 'border-slate-500/20 bg-slate-500/[.035]' : active.length > 1 ? 'border-amber-400/20 bg-amber-400/[.045]' : 'border-white/8 bg-white/[.03]'}`}><div className="flex items-center gap-2"><Globe2 className={`size-4 shrink-0 ${item.scanner ? 'text-slate-400' : 'text-amber-300'}`} /><p className="min-w-0 flex-1 truncate font-mono text-sm font-medium text-slate-100">{item.ip}</p>{item.scanner && <Badge className="bg-slate-400/12 text-slate-300">扫描 IP · {item.scannedPorts}端口</Badge>}{item.isNew && !item.scanner && <Badge className="bg-violet-400/10 text-violet-300">新</Badge>}</div><div className="mt-2 rounded-md border border-cyan-400/10 bg-cyan-400/[.055] px-2 py-1.5"><p className="flex items-center gap-1.5 truncate text-xs font-medium text-cyan-200"><MapPin className="size-3.5 shrink-0 text-cyan-300" /><span className="text-cyan-400/70">归属</span>{item.location}</p></div><div className="mt-1.5 flex items-start gap-1.5 rounded-md border border-violet-400/10 bg-violet-400/[.045] px-2 py-1.5 text-[11px] leading-4 text-violet-200"><Clock3 className="mt-0.5 size-3.5 shrink-0 text-violet-300" /><div className="min-w-0"><p><span className="text-violet-400/70">首次</span> {formatSeenAt(item.firstSeen)}</p><p><span className="text-violet-400/70">最后</span> {item.online ? '当前在线' : formatSeenAt(item.lastSeen)}</p></div></div></div>) : <div className="rounded-lg border border-dashed border-white/8 px-3 py-2 text-sm text-slate-600">最近没有活跃 IP</div>}{port.ips.length > 3 && risk.level < 2 && <Button type="button" size="sm" variant="ghost" onClick={() => setShowAllIps((current) => !current)} aria-expanded={showAllIps} className="self-center text-slate-400 hover:bg-white/5 hover:text-cyan-200">{showAllIps ? '收起 IP' : `展开另外 ${port.ips.length - 3} 个 IP`}<ChevronDown className={`size-4 transition-transform ${showAllIps ? 'rotate-180' : ''}`} /></Button>}</div></div>
     <div><Badge variant="outline" className={`border ${risk.tone}`}>{risk.label}</Badge><p className="mt-2 text-xs leading-5 text-slate-500">{risk.reason}</p>{(port.overlapMinutes || 0) > 0 && <p className="text-xs text-slate-600">重叠 {port.overlapMinutes} 分钟</p>}</div>
     <div className="flex flex-wrap items-center justify-end gap-1.5"><Button size="sm" variant="ghost" onClick={() => setPortFlag(node.alias, port.id, 'observing')} className={port.observing ? 'bg-violet-400/10 text-violet-300' : 'text-slate-400'}><Eye className="size-3.5" />观察</Button><Button size="sm" variant="ghost" onClick={() => setPortFlag(node.alias, port.id, 'trusted')} className={port.trusted ? 'bg-sky-400/10 text-sky-300' : 'text-slate-400'}><ShieldCheck className="size-3.5" />可信</Button><Button size="sm" variant="ghost" onClick={() => setMessage(`${node.alias}-${port.port} 的 7 天记录将在采集器接入后显示。`)} className="text-slate-400"><History className="size-3.5" />7天</Button><Switch checked={port.enabled} onCheckedChange={(next) => setPending({ alias: node.alias, id: port.id, next })} aria-label={`${port.enabled ? '停用' : '启用'} ${node.alias} 端口 ${port.port}`} /></div>
+    <div className="space-y-2 lg:col-start-6"><Textarea value={note} onChange={(event) => setNote(event.target.value)} disabled={!noteLoaded || savingNote} maxLength={2000} rows={2} aria-label={`${node.alias} 端口 ${port.port} 处理备注`} placeholder={noteLoaded ? '输入处理备注…' : '正在读取备注…'} className="min-h-16 border-white/15 bg-[#071019] text-sm text-slate-100 placeholder:text-slate-500" /><div className="flex items-center justify-between gap-2"><span className="text-xs text-slate-400" role="status">{noteLoaded && (note === savedNote ? '已保存' : '未保存')}</span><Button size="sm" onClick={saveNote} disabled={!noteLoaded || savingNote || note === savedNote} className="bg-cyan-400 text-slate-950 hover:bg-cyan-300">{savingNote ? '保存中' : '保存备注'}</Button></div>{noteError && <p role="alert" className="text-sm text-rose-300">{noteError}</p>}</div>
   </div></div>;
 }
 

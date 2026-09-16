@@ -16,4 +16,4 @@ RUN pnpm build
 
 EXPOSE 8787
 
-CMD ["pnpm", "start", "--ip", "0.0.0.0", "--port", "8787"]
+CMD ["pnpm", "start", "--ip", "0.0.0.0", "--port", "8787", "--persist-to", "/app/.wrangler/state"]

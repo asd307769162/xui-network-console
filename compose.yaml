@@ -17,6 +17,7 @@ services:
       COLLECTOR_TOKEN_P1: ${COLLECTOR_TOKEN_P1:-}
     volumes:
       - ./.env:/app/dist/server/.dev.vars:ro
+      - console-data:/app/.wrangler
     expose:
       - "8787"
 
@@ -32,3 +33,6 @@ services:
       - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
       - /opt/xui-network-console-secrets/htpasswd:/etc/nginx/.htpasswd:ro
       - /opt/xui-network-console-secrets/session-map.conf:/etc/nginx/conf.d/00-session-map.conf:ro
+
+volumes:
+  console-data:
