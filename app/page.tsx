@@ -17,6 +17,7 @@ type ModelContext = { registerTool: (tool: Record<string, unknown>, options?: { 
 type PortFlags = Record<string, { trusted?: boolean; observing?: boolean }>;
 
 const PORT_FLAGS_STORAGE_KEY = 'xui-network-console.port-flags.v1';
+const PORT_FLAGS_MIGRATED_KEY = 'xui-network-console.port-flags.server-migrated.v1';
 
 const portFlagKey = (alias: string, id: number) => `${alias.toLowerCase()}:${id}`;
 
@@ -30,7 +31,7 @@ function loadPortNotes() {
   return notesRequest;
 }
 
-function readPortFlags(): PortFlags {
+function readLocalPortFlags(): PortFlags {
   try {
     const stored = window.localStorage.getItem(PORT_FLAGS_STORAGE_KEY);
     return stored ? JSON.parse(stored) as PortFlags : {};
@@ -39,12 +40,43 @@ function readPortFlags(): PortFlags {
   }
 }
 
-function writePortFlags(flags: PortFlags) {
+function writeLocalPortFlags(flags: PortFlags) {
   try {
     window.localStorage.setItem(PORT_FLAGS_STORAGE_KEY, JSON.stringify(flags));
   } catch {
     // The UI state still updates when storage is unavailable.
   }
+}
+
+let portFlagsRequest: Promise<PortFlags> | undefined;
+function loadPortFlags() {
+  portFlagsRequest ??= fetch('/api/xui/flags').then(async (response) => {
+    const data = await response.json() as { flags?: PortFlags; error?: string };
+    if (!response.ok || !data.flags) throw new Error(data.error || '处理标记读取失败');
+    const merged = { ...data.flags };
+    const migrations: Promise<Response>[] = [];
+    let shouldMigrate = false;
+    try { shouldMigrate = window.localStorage.getItem(PORT_FLAGS_MIGRATED_KEY) !== '1'; } catch { /* Server data remains authoritative. */ }
+    if (shouldMigrate) {
+      for (const [key, entry] of Object.entries(readLocalPortFlags())) {
+        const server = merged[key] || {};
+        const next = { trusted: Boolean(server.trusted || entry.trusted), observing: Boolean(server.observing || entry.observing) };
+        merged[key] = next;
+        if (next.trusted !== Boolean(server.trusted) || next.observing !== Boolean(server.observing)) {
+          const split = key.lastIndexOf(':');
+          migrations.push(fetch('/api/xui/flags', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ alias: key.slice(0, split), id: Number(key.slice(split + 1)), ...next }) }));
+        }
+      }
+    }
+    if (migrations.length) {
+      const responses = await Promise.all(migrations);
+      if (responses.some((item) => !item.ok)) throw new Error('本机已有标记迁移失败');
+    }
+    if (shouldMigrate) try { window.localStorage.setItem(PORT_FLAGS_MIGRATED_KEY, '1'); } catch { /* Ignore unavailable browser storage. */ }
+    writeLocalPortFlags(merged);
+    return merged;
+  }).catch((error) => { portFlagsRequest = undefined; throw error; });
+  return portFlagsRequest;
 }
 
 function applyPortFlags(nodes: Node[], flags: PortFlags) {
@@ -126,23 +158,24 @@ export default function Home() {
     return matches && stateMatches;
   }).sort((a, b) => riskFor(b).level - riskFor(a).level) })).filter((node) => node.ports.length > 0).sort((a, b) => Math.max(...b.ports.map((port) => riskFor(port).level)) - Math.max(...a.ports.map((port) => riskFor(port).level))), [nodes, query, status]);
 
-  const setPortFlag = (alias: string, id: number, flag: 'trusted' | 'observing') => {
-    setNodes((current) => {
-      let nextValue = false;
-      const next = current.map((node) => node.alias === alias ? { ...node, ports: node.ports.map((port) => {
-        if (port.id !== id) return port;
-        nextValue = !port[flag];
-        return { ...port, [flag]: nextValue };
-      }) } : node);
-      const flags = readPortFlags();
+  const setPortFlag = async (alias: string, id: number, flag: 'trusted' | 'observing') => {
+    const currentPort = nodesRef.current.find((node) => node.alias === alias)?.ports.find((port) => port.id === id);
+    if (!currentPort) return;
+    const entry = { trusted: Boolean(currentPort.trusted), observing: Boolean(currentPort.observing), [flag]: !currentPort[flag] };
+    setMessage('正在保存处理标记…');
+    try {
+      const response = await fetch('/api/xui/flags', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ alias, id, ...entry }) });
+      const data = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(data.error || '处理标记保存失败');
+      setNodes((current) => current.map((node) => node.alias === alias ? { ...node, ports: node.ports.map((port) => port.id === id ? { ...port, ...entry } : port) } : node));
+      const flags = await loadPortFlags();
       const key = portFlagKey(alias, id);
-      const entry = { ...flags[key], [flag]: nextValue };
-      if (!entry.trusted && !entry.observing) delete flags[key];
-      else flags[key] = entry;
-      writePortFlags(flags);
-      return next;
-    });
-    setMessage(flag === 'trusted' ? '已更新可信标记。' : '已更新观察状态；自动关闭端口保持关闭。');
+      if (!entry.trusted && !entry.observing) delete flags[key]; else flags[key] = entry;
+      writeLocalPortFlags(flags);
+      setMessage(flag === 'trusted' ? '可信标记已保存到服务器。' : '观察状态已保存到服务器；自动关闭端口保持关闭。');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '处理标记保存失败');
+    }
   };
 
   const refreshLive = async () => {
@@ -152,7 +185,7 @@ export default function Home() {
       const response = await fetch('/api/xui/snapshot');
       const data = await response.json() as { nodes?: Node[]; error?: string };
       if (!response.ok || !data.nodes) throw new Error(data.error || '实时读取失败');
-      setNodes(applyPortFlags(data.nodes, readPortFlags()));
+      setNodes(applyPortFlags(data.nodes, await loadPortFlags()));
       setSource('live');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '实时读取失败');
