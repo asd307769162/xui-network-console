@@ -6,7 +6,7 @@ After=network.target x-ui.service
 Type=simple
 User=root
 Group=root
-ExecStart=/usr/bin/python3 /opt/xui-connection-collector/xui_connection_collector.py --interval 5 --retention-days 7 --listen 0.0.0.0 --http-port 18787 --allow-ip 103.118.245.108 --token-file /etc/xui-connection-collector.token
+ExecStart=/usr/bin/python3 /opt/xui-connection-collector/xui_connection_collector.py --interval 5 --retention-days 7 --listen 0.0.0.0 --http-port 18787 --allow-ip 103.118.245.108 --token-file /etc/xui-connection-collector.token --maxmind-city-db /var/lib/GeoIP/GeoLite2-City.mmdb --maxmind-asn-db /var/lib/GeoIP/GeoLite2-ASN.mmdb
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
@@ -14,6 +14,7 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
 ReadOnlyPaths=/etc/x-ui /etc/xui-connection-collector.token /proc/net
+ReadOnlyPaths=/var/lib/GeoIP
 ReadWritePaths=/var/lib/xui-connection-collector
 
 [Install]

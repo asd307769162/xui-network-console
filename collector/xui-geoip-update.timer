@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly MaxMind GeoLite2 database update
+
+[Timer]
+OnCalendar=Sun *-*-* 04:25:00
+RandomizedDelaySec=45m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

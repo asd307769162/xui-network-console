@@ -9,6 +9,7 @@ import json
 import os
 import signal
 import sqlite3
+import sys
 import time
 import threading
 import urllib.error
@@ -18,7 +19,7 @@ from socketserver import ThreadingMixIn
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
 
 
 TCP_ESTABLISHED = "01"
@@ -126,7 +127,20 @@ def open_state_db(path: Path) -> sqlite3.Connection:
     return connection
 
 
-def lookup_ip_location(ip: str, endpoint: str, timeout: float) -> Dict[str, str]:
+def normalize_isp(isp: str, asn: str = "") -> str:
+    asn = asn.upper()
+    asn = asn[2:] if asn.startswith("AS") else asn
+    isp_key = isp.lower()
+    if asn in {"9808", "56046", "24400"} or "china mobile" in isp_key:
+        return "中国移动"
+    if asn in {"4134", "4812", "4809"} or "china telecom" in isp_key:
+        return "中国电信"
+    if asn in {"4837", "9929", "17621"} or "china unicom" in isp_key:
+        return "中国联通"
+    return isp
+
+
+def lookup_ip_location(ip: str, endpoint: str, timeout: float) -> Dict[str, object]:
     address = ipaddress.ip_address(ip)
     if not address.is_global:
         return {"location": "内网地址", "country": "", "region": "", "city": "", "isp": ""}
@@ -143,20 +157,52 @@ def lookup_ip_location(ip: str, endpoint: str, timeout: float) -> Dict[str, str]
     city = str(payload.get("city") or "")
     connection = payload.get("connection") if isinstance(payload.get("connection"), dict) else {}
     isp = str(connection.get("isp") or connection.get("org") or "")
-    asn = str(connection.get("asn") or "").upper()
-    asn = asn[2:] if asn.startswith("AS") else asn
-    isp_key = isp.lower()
-    if asn in {"9808", "56046", "24400"} or "china mobile" in isp_key:
-        isp = "中国移动"
-    elif asn in {"4134", "4812", "4809"} or "china telecom" in isp_key:
-        isp = "中国电信"
-    elif asn in {"4837", "9929", "17621"} or "china unicom" in isp_key:
-        isp = "中国联通"
+    asn = str(connection.get("asn") or "")
+    isp = normalize_isp(isp, asn)
     location = " · ".join(part for part in (country, region, city, isp) if part) or "未知"
-    return {"location": location, "country": country, "region": region, "city": city, "isp": isp}
+    return {"location": location, "country": country, "region": region, "city": city, "isp": isp, "accuracy_radius": None}
 
 
-def resolve_one_location(state_db: Path, endpoint: str, timeout: float, retry_seconds: int) -> bool:
+def open_maxmind_readers(city_db: Optional[Path], asn_db: Optional[Path]):
+    if not city_db:
+        return None, None
+    if not city_db.is_file():
+        raise FileNotFoundError(f"MaxMind City database not found: {city_db}")
+    try:
+        import geoip2.database
+    except ImportError as error:
+        raise RuntimeError("python3-geoip2 is required for MaxMind lookup") from error
+    city_reader = geoip2.database.Reader(str(city_db))
+    asn_reader = geoip2.database.Reader(str(asn_db)) if asn_db and asn_db.is_file() else None
+    return city_reader, asn_reader
+
+
+def lookup_maxmind_location(ip: str, city_reader, asn_reader=None) -> Dict[str, object]:
+    address = ipaddress.ip_address(ip)
+    if not address.is_global:
+        return {"location": "内网地址", "country": "", "region": "", "city": "", "isp": "", "accuracy_radius": None}
+    response = city_reader.city(ip)
+    country = str(response.country.names.get("zh-CN") or response.country.name or "")
+    region = ""
+    if response.subdivisions:
+        region = str(response.subdivisions.most_specific.names.get("zh-CN") or response.subdivisions.most_specific.name or "")
+    city = str(response.city.names.get("zh-CN") or response.city.name or "")
+    radius = response.location.accuracy_radius
+    isp = ""
+    if asn_reader:
+        try:
+            asn_response = asn_reader.asn(ip)
+            isp = normalize_isp(str(asn_response.autonomous_system_organization or ""), str(asn_response.autonomous_system_number or ""))
+        except Exception:
+            pass
+    geo_parts = [part for part in (country, region, city) if part]
+    if not region and not city:
+        geo_parts.append("位置不确定")
+    location = " · ".join(geo_parts + ([isp] if isp else [])) or "未知"
+    return {"location": location, "country": country, "region": region, "city": city, "isp": isp, "accuracy_radius": radius}
+
+
+def resolve_one_location(state_db: Path, endpoint: str, timeout: float, retry_seconds: int, maxmind_readers: Tuple[object, object] = (None, None)) -> bool:
     state = open_state_db(state_db)
     now = int(time.time())
     try:
@@ -175,9 +221,15 @@ def resolve_one_location(state_db: Path, endpoint: str, timeout: float, retry_se
             return False
         ip = str(row[0])
         try:
-            result = lookup_ip_location(ip, endpoint, timeout)
+            city_reader, asn_reader = maxmind_readers
+            result = lookup_maxmind_location(ip, city_reader, asn_reader) if city_reader else lookup_ip_location(ip, endpoint, timeout)
             values = (ip, result["location"], result["country"], result["region"], result["city"], result["isp"], "ok", now)
-        except (OSError, ValueError, json.JSONDecodeError):
+        except Exception as error:
+            print(
+                f"geolocation lookup failed for {ip}: {type(error).__name__}: {error}",
+                file=sys.stderr,
+                flush=True,
+            )
             values = (ip, "归属地查询失败", "", "", "", "", "failed", now)
         state.execute(
             """
@@ -193,10 +245,14 @@ def resolve_one_location(state_db: Path, endpoint: str, timeout: float, retry_se
         state.close()
 
 
-def geo_resolver_loop(state_db: Path, endpoint: str, timeout: float, retry_seconds: int, stop_event: threading.Event) -> None:
+def geo_resolver_loop(state_db: Path, endpoint: str, timeout: float, retry_seconds: int, stop_event: threading.Event, city_db: Optional[Path] = None, asn_db: Optional[Path] = None) -> None:
+    readers = open_maxmind_readers(city_db, asn_db)
     while not stop_event.is_set():
-        resolved = resolve_one_location(state_db, endpoint, timeout, retry_seconds)
+        resolved = resolve_one_location(state_db, endpoint, timeout, retry_seconds, readers)
         stop_event.wait(1.2 if resolved else 10.0)
+    for reader in readers:
+        if reader:
+            reader.close()
 
 
 def record_sample(
@@ -363,6 +419,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--allow-ip", default="127.0.0.1")
     parser.add_argument("--token-file", type=Path)
     parser.add_argument("--geo-endpoint", default="https://ipwho.is/{ip}?lang=zh-CN")
+    parser.add_argument("--maxmind-city-db", type=Path)
+    parser.add_argument("--maxmind-asn-db", type=Path)
     parser.add_argument("--geo-timeout", type=float, default=4.0)
     parser.add_argument("--geo-retry-hours", type=int, default=6)
     parser.add_argument("--once", action="store_true")
@@ -385,7 +443,7 @@ def main() -> int:
     stop_event = threading.Event()
     geo_thread = threading.Thread(
         target=geo_resolver_loop,
-        args=(args.state_db, args.geo_endpoint, args.geo_timeout, args.geo_retry_hours * 3600, stop_event),
+        args=(args.state_db, args.geo_endpoint, args.geo_timeout, args.geo_retry_hours * 3600, stop_event, args.maxmind_city_db, args.maxmind_asn_db),
         name="geo-resolver",
         daemon=True,
     )

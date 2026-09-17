@@ -9,6 +9,8 @@ from xui_connection_collector import (
     atomic_write_json,
     decode_proc_address,
     make_snapshot,
+    lookup_maxmind_location,
+    normalize_isp,
     open_state_db,
     parse_proc_net_tcp,
     record_sample,
@@ -22,6 +24,31 @@ PROC_TCP6 = """  sl  local_address                         remote_address       
 
 
 class CollectorTests(unittest.TestCase):
+    def test_normalizes_chinese_carriers(self):
+        self.assertEqual(normalize_isp("CHINA UNICOM China169 Backbone", "4837"), "中国联通")
+
+    def test_maxmind_does_not_invent_a_city(self):
+        class Names:
+            def __init__(self, name="", names=None):
+                self.name = name
+                self.names = names or {}
+
+        class Subdivisions(list):
+            @property
+            def most_specific(self):
+                return self[-1]
+
+        response = type("Response", (), {
+            "country": Names("China", {"zh-CN": "中国"}),
+            "subdivisions": Subdivisions(),
+            "city": Names(),
+            "location": type("Location", (), {"accuracy_radius": 1000})(),
+        })()
+        reader = type("Reader", (), {"city": lambda self, _ip: response})()
+        result = lookup_maxmind_location("116.129.132.177", reader)
+        self.assertEqual(result["location"], "中国 · 位置不确定")
+        self.assertEqual(result["accuracy_radius"], 1000)
+
     def test_decodes_ipv4_mapped_ipv6(self):
         self.assertEqual(decode_proc_address("0000000000000000FFFF0000D8DED431", True), "49.212.222.216")
 
@@ -40,7 +67,7 @@ class CollectorTests(unittest.TestCase):
             self.assertFalse(payload["ports"][0]["ips"][0]["scanner"])
             output = root / "snapshot.json"
             atomic_write_json(output, payload)
-            self.assertEqual(json.loads(output.read_text())["schemaVersion"], 1)
+            self.assertEqual(json.loads(output.read_text(encoding="utf-8"))["schemaVersion"], 1)
             state.close()
 
     def test_short_visits_to_multiple_ports_are_scanner(self):
