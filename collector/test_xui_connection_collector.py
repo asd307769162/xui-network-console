@@ -10,6 +10,8 @@ from xui_connection_collector import (
     decode_proc_address,
     make_snapshot,
     lookup_maxmind_location,
+    lookup_preferred_location,
+    lookup_qqwry_china,
     normalize_isp,
     open_state_db,
     parse_proc_net_tcp,
@@ -48,6 +50,35 @@ class CollectorTests(unittest.TestCase):
         result = lookup_maxmind_location("116.129.132.177", reader)
         self.assertEqual(result["location"], "中国 · 位置不确定")
         self.assertEqual(result["accuracy_radius"], 1000)
+
+    def test_qqwry_is_preferred_for_china_ipv4(self):
+        class Reader:
+            def lookup(self, _ip):
+                return "中国–云南–昆明", "中国联通"
+
+        result = lookup_qqwry_china("116.129.132.177", Reader())
+        self.assertEqual(result["location"], "中国 · 云南 · 昆明 · 中国联通")
+        self.assertEqual(result["region"], "云南")
+
+    def test_non_china_qqwry_falls_back_to_maxmind(self):
+        class QQReader:
+            def lookup(self, _ip):
+                return "美国–加利福尼亚州", "Google"
+
+        class Names:
+            def __init__(self, name="", names=None):
+                self.name = name
+                self.names = names or {}
+
+        response = type("Response", (), {
+            "country": Names("United States", {"zh-CN": "美国"}),
+            "subdivisions": [],
+            "city": Names("Mountain View", {"zh-CN": "山景城"}),
+            "location": type("Location", (), {"accuracy_radius": 20})(),
+        })()
+        maxmind = type("Reader", (), {"city": lambda self, _ip: response})()
+        result = lookup_preferred_location("8.8.8.8", "", 1, (maxmind, None), QQReader())
+        self.assertEqual(result["location"], "美国 · 山景城")
 
     def test_decodes_ipv4_mapped_ipv6(self):
         self.assertEqual(decode_proc_address("0000000000000000FFFF0000D8DED431", True), "49.212.222.216")

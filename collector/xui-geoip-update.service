@@ -1,5 +1,5 @@
 [Unit]
-Description=Update MaxMind GeoLite2 databases for X-UI collector
+Description=Update MaxMind GeoLite2 and QQWry databases for X-UI collector
 After=network-online.target
 Wants=network-online.target
 
@@ -13,5 +13,5 @@ PrivateTmp=true
 NoNewPrivileges=true
 ProtectHome=true
 ProtectSystem=strict
-ReadOnlyPaths=/etc/xui-geoip.conf
+ReadOnlyPaths=-/etc/xui-geoip.conf
 ReadWritePaths=/var/lib/GeoIP

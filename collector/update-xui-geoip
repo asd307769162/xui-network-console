@@ -3,31 +3,36 @@ set -eu
 
 CONFIG=/etc/xui-geoip.conf
 DATABASE_DIR=/var/lib/GeoIP
-
-if [ ! -r "$CONFIG" ]; then
-    echo "missing $CONFIG" >&2
-    exit 1
-fi
-
-. "$CONFIG"
-: "${MAXMIND_ACCOUNT_ID:?missing MAXMIND_ACCOUNT_ID}"
-: "${MAXMIND_LICENSE_KEY:?missing MAXMIND_LICENSE_KEY}"
+QQWRY_URL=https://raw.githubusercontent.com/nmgliangwei/qqwry/main/qqwry.dat
 
 umask 077
 work_dir=$(mktemp -d)
 trap 'rm -rf "$work_dir"' EXIT HUP INT TERM
 install -d -m 0755 "$DATABASE_DIR"
 
-for edition in GeoLite2-City GeoLite2-ASN; do
-    edition_dir="$work_dir/$edition"
-    mkdir "$edition_dir"
-    curl --fail --silent --show-error --location \
-        --user "$MAXMIND_ACCOUNT_ID:$MAXMIND_LICENSE_KEY" \
-        "https://download.maxmind.com/geoip/databases/$edition/download?suffix=tar.gz" \
-        --output "$edition_dir/archive.tar.gz"
-    tar -xzf "$edition_dir/archive.tar.gz" -C "$edition_dir"
-    database=$(find "$edition_dir" -type f -name "$edition.mmdb" -print -quit)
-    test -n "$database"
-    install -m 0644 "$database" "$DATABASE_DIR/$edition.mmdb.new"
-    mv -f "$DATABASE_DIR/$edition.mmdb.new" "$DATABASE_DIR/$edition.mmdb"
-done
+if [ -r "$CONFIG" ]; then
+    . "$CONFIG"
+    : "${MAXMIND_ACCOUNT_ID:?missing MAXMIND_ACCOUNT_ID}"
+    : "${MAXMIND_LICENSE_KEY:?missing MAXMIND_LICENSE_KEY}"
+    for edition in GeoLite2-City GeoLite2-ASN; do
+        edition_dir="$work_dir/$edition"
+        mkdir "$edition_dir"
+        curl --fail --silent --show-error --location \
+            --user "$MAXMIND_ACCOUNT_ID:$MAXMIND_LICENSE_KEY" \
+            "https://download.maxmind.com/geoip/databases/$edition/download?suffix=tar.gz" \
+            --output "$edition_dir/archive.tar.gz"
+        tar -xzf "$edition_dir/archive.tar.gz" -C "$edition_dir"
+        database=$(find "$edition_dir" -type f -name "$edition.mmdb" -print -quit)
+        test -n "$database"
+        install -m 0644 "$database" "$DATABASE_DIR/$edition.mmdb.new"
+        mv -f "$DATABASE_DIR/$edition.mmdb.new" "$DATABASE_DIR/$edition.mmdb"
+    done
+else
+    echo "MaxMind configuration not found; updating QQWry only"
+fi
+
+curl --fail --silent --show-error --location "$QQWRY_URL" --output "$work_dir/qqwry.dat"
+qqwry_size=$(wc -c < "$work_dir/qqwry.dat")
+test "$qqwry_size" -gt 1048576
+install -m 0644 "$work_dir/qqwry.dat" "$DATABASE_DIR/qqwry.dat.new"
+mv -f "$DATABASE_DIR/qqwry.dat.new" "$DATABASE_DIR/qqwry.dat"
