@@ -1,4 +1,5 @@
 export const XUI_NODES = [
+  { alias: 'g4', url: 'http://186.241.79.160:54321', collectorUrl: 'http://186.241.79.160:18787/v1/snapshot' },
   { alias: 'wf3', url: 'http://38.55.148.140:54321', collectorUrl: 'http://38.55.148.140:18787/v1/snapshot' },
   { alias: 'wf2', url: 'http://38.55.148.143:54321', collectorUrl: 'http://38.55.148.143:18787/v1/snapshot' },
   { alias: 'w0', url: 'http://154.40.33.44:54321', collectorUrl: 'http://154.40.33.44:18787/v1/snapshot' },
