@@ -183,7 +183,7 @@ export default function Home() {
     setRefreshing(true);
     setMessage('');
     try {
-      const response = await fetch('/api/xui/snapshot');
+      const response = await fetch('/api/xui/snapshot?fresh=1', { cache: 'no-store' });
       const data = await response.json() as { nodes?: Node[]; error?: string };
       if (!response.ok || !data.nodes) throw new Error(data.error || '实时读取失败');
       setNodes(applyPortFlags(data.nodes, await loadPortFlags()));
@@ -213,7 +213,7 @@ export default function Home() {
       const data = await response.json() as { error?: string };
       if (!response.ok) throw new Error(data.error || '端口操作失败');
       setNodes((current) => current.map((node) => node.alias === change.alias ? { ...node, ports: node.ports.map((port) => port.id === change.id ? { ...port, enabled: change.next } : port) } : node));
-      setMessage(`${change.alias} 端口状态已更新。`);
+      setMessage(`${change.alias} 端口状态已同步到 X-UI，并已回读确认。`);
       setPending(null);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '端口操作失败');

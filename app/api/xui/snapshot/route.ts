@@ -42,12 +42,15 @@ async function createSnapshot() {
   return { nodes: results, collectedAt: new Date().toISOString() };
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   const now = Date.now();
-  if (cachedSnapshot && cachedSnapshot.expires > now) return Response.json(cachedSnapshot.value, { headers: { 'cache-control': 'private, max-age=5' } });
+  if (new URL(request.url).searchParams.get('fresh') === '1') {
+    return Response.json(await createSnapshot(), { headers: { 'cache-control': 'no-store' } });
+  }
+  if (cachedSnapshot && cachedSnapshot.expires > now) return Response.json(cachedSnapshot.value, { headers: { 'cache-control': 'no-store' } });
   pendingSnapshot ??= createSnapshot().then((value) => {
     cachedSnapshot = { expires: Date.now() + 5_000, value };
     return value;
   }).finally(() => { pendingSnapshot = undefined; });
-  return Response.json(await pendingSnapshot, { headers: { 'cache-control': 'private, max-age=5' } });
+  return Response.json(await pendingSnapshot, { headers: { 'cache-control': 'no-store' } });
 }

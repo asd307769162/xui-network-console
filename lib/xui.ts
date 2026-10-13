@@ -31,6 +31,7 @@ function encodeForm(data: JsonRecord) {
 async function post(root: string, path: string, data: JsonRecord, cookie?: string) {
   const response = await fetch(`${root}${path}`, {
     method: 'POST',
+    cache: 'no-store',
     headers: {
       'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
       'x-requested-with': 'XMLHttpRequest',
@@ -65,7 +66,15 @@ export async function setInboundEnabled(alias: string, id: number, enabled: bool
   const inbound = inbounds.find((item) => Number(item.id) === id);
   if (!inbound) throw new Error('没有找到对应入站');
   const cookie = await session(node.url);
-  const payload = { ...inbound, enable: enabled };
+  const payload: JsonRecord = {};
+  // List responses include computed client statistics that update endpoints cannot bind.
+  for (const field of ['id', 'up', 'down', 'total', 'remark', 'expiryTime', 'listen', 'port', 'protocol', 'settings', 'streamSettings', 'sniffing', 'allocate']) {
+    if (inbound[field] !== undefined) payload[field] = inbound[field];
+  }
+  payload.enable = enabled;
   const { body } = await post(node.url, `/xui/inbound/update/${id}`, payload, cookie);
+  const verified = await listInbounds(alias);
+  const actual = verified.inbounds.find((item) => Number(item.id) === id);
+  if (!actual || actual.enable !== enabled) throw new Error('X-UI 状态回读不一致，请刷新后重试');
   return { alias: node.alias, id, enabled, message: String(body.msg || '操作成功') };
 }
